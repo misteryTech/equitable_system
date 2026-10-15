@@ -1,0 +1,17 @@
+# Local settings with the database password (template: includes/config.local.example.php)
+includes/config.local.php
+
+# Files people upload (profile pictures, terminal photos) - keep the folders and their rules
+uploads/**
+!uploads/.htaccess
+!uploads/*/
+!uploads/*/.gitkeep
+
+# Editor / sync leftovers
+das.php (f2r8ru)*
+*.dtmp
+.$*
+*.bak
+Thumbs.db
+.DS_Store
+.vscode/

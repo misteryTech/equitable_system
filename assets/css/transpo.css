@@ -1,0 +1,24 @@
+/* TRANSPORTATION EXPENSE module */
+
+/* Tom Select inside small forms and modals */
+.ts-wrapper.form-select,
+.ts-wrapper.form-control { padding: 0; }
+.ts-dropdown { z-index: 1060; }
+.ts-dropdown .create strong { color: var(--bs-primary); }
+
+/* Filing: one card per leg, stacked on phones */
+.transpo-leg { border-left: 4px solid var(--bs-primary); }
+.transpo-leg .leg-no { font-weight: 600; color: var(--bs-secondary); }
+.transpo-leg .leg-rate .badge { font-weight: 500; }
+.transpo-route { white-space: normal; }
+.transpo-route .arrow { color: var(--bs-secondary); padding: 0 .25rem; }
+
+/* Saved tickets list */
+.transpo-visit + .transpo-visit { border-top: 1px dashed var(--bs-border-color); }
+.transpo-total { font-variant-numeric: tabular-nums; }
+
+/* Bigger touch targets on phones */
+@media (max-width: 575.98px) {
+  .transpo-leg .btn-sm { padding: .4rem .6rem; }
+  .transpo-actions .btn { flex: 1 1 auto; }
+}

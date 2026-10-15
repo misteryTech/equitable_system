@@ -1,0 +1,4 @@
+# Block direct access to project files that are not web pages.
+<FilesMatch "\.(sql|md|drawio|bak)$">
+    Require all denied
+</FilesMatch>
