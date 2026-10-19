@@ -15,3 +15,9 @@ das.php (f2r8ru)*
 Thumbs.db
 .DS_Store
 .vscode/
+
+# Database exports with real data (user accounts) and project archives - keep off GitHub
+database/database_upload/
+*.rar
+*.zip
+*.sql.gz

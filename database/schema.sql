@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS users (
     review_note   VARCHAR(255) NULL,     -- reason for rejecting
     field_engineer_id VARCHAR(20)  NULL UNIQUE,  -- required for field engineers, optional for admins
     location      VARCHAR(100) NOT NULL DEFAULT 'M2C Depot',
+    mobile_number VARCHAR(20)  NULL,     -- shown in the Formal email sign-off
+    area          VARCHAR(100) NULL,     -- "F.E <AREA>" in the email sign-off, e.g. COTABATO CITY
     profile_picture VARCHAR(255) NULL,   -- file name in uploads/profile/ (optional)
     reg_time_in   TIME         NULL,     -- regular schedule, e.g. 09:00:00
     reg_time_out  TIME         NULL,     -- e.g. 18:00:00 (earlier than reg_time_in = overnight)
@@ -30,6 +32,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS locations (
     location_id   INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     name          VARCHAR(100) NOT NULL UNIQUE,
+    address       VARCHAR(255) NULL,     -- "Address:" line of ATW emails
     created_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -82,18 +85,31 @@ CREATE TABLE IF NOT EXISTS notifications (
   CONSTRAINT fk_notifications_user FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 
+-- Terminal labels (admin-editable on Terminal Labels).
+CREATE TABLE IF NOT EXISTS terminal_labels (
+  id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  name       VARCHAR(50)  NOT NULL UNIQUE,
+  is_active  TINYINT(1)   NOT NULL DEFAULT 1,        -- inactive labels stay on old terminals but can't be picked
+  sort_order SMALLINT     NOT NULL DEFAULT 0,
+  created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT IGNORE INTO terminal_labels (name, sort_order) VALUES ('CBG-MP', 10), ('CBG-AB', 20), ('TBG', 30);
+
 -- Terminal registration.
 CREATE TABLE IF NOT EXISTS terminals (
   terminal_id   INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   terminal_name VARCHAR(100) NOT NULL UNIQUE,
   brand         VARCHAR(100) NOT NULL,
-  label         ENUM('CBG-MP', 'CBG-AB', 'TBG') NOT NULL,
+  model           VARCHAR(50)  NULL,                    -- e.g. DX8000, S1F2
+  current_version VARCHAR(30)  NULL,
+  label_id      INT UNSIGNED NOT NULL,
   bank_type     ENUM('bdo', 'non_bdo') NOT NULL,          -- BDO or Non-BDO
   created_by    INT UNSIGNED NULL,
   created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  KEY idx_terminals_label (label),
   KEY idx_terminals_bank (bank_type),
+  CONSTRAINT fk_terminals_label FOREIGN KEY (label_id) REFERENCES terminal_labels(id),
   CONSTRAINT fk_terminals_created_by FOREIGN KEY (created_by) REFERENCES users(user_id) ON DELETE SET NULL
 );
 
@@ -239,3 +255,124 @@ ALTER TABLE users
 -- Shared default starting point, used until an engineer picks their own base.
 INSERT IGNORE INTO transpo_locations (name, normalized_name, type)
 VALUES ('NEAREST HIGHWAY FROM BASE', 'NEAREST HIGHWAY FROM BASE', 'base');
+
+-- ===== EMAIL GENERATOR (see database/migrations/2026_10_17_email_request*.sql) =====
+-- The system never sends email; it only builds the text to paste into Gmail.
+-- 1. Request types shown as checkboxes (admin-editable on Email Templates).
+--    phrase: wording in the Formal sentence; {model} = terminal model, {text} = typed text.
+CREATE TABLE IF NOT EXISTS email_request_types (
+  id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  label      VARCHAR(60)  NOT NULL UNIQUE,
+  phrase     VARCHAR(150) NOT NULL,
+  text_mode  ENUM('none', 'append', 'replace') NOT NULL DEFAULT 'none',   -- typed text: none / after the label / instead of it
+  text_hint  VARCHAR(60)  NULL,                                          -- placeholder for the text box
+  sort_order SMALLINT     NOT NULL DEFAULT 0,
+  is_active  TINYINT(1)   NOT NULL DEFAULT 1,
+  created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT IGNORE INTO email_request_types (label, phrase, text_mode, text_hint, sort_order) VALUES
+  ('Transfer',                'transfer {model}',                       'none',    NULL,               10),
+  ('Update to latest version', 'update {model} to the latest version',   'none',    NULL,               20),
+  ('Update to version',       'update {model} to version {text}',       'append',  'e.g. 16.21',       30),
+  ('Change SIM to Globe IOT', 'change the SIM to Globe IOT',            'none',    NULL,               40),
+  ('Change SIM to Smart',     'change the SIM to Smart',                'none',    NULL,               50),
+  ('Replacement',             'replace {model}',                        'none',    NULL,               60),
+  ('Pull-out',                'pull out {model}',                       'none',    NULL,               70),
+  ('Reprogram/Reset',         'reprogram/reset {model}',                'none',    NULL,               80),
+  ('Other',                   '{text}',                                 'replace', 'Describe the request', 90);
+
+-- 2. Greeting / closing texts of the two templates (single row, admin-editable).
+CREATE TABLE IF NOT EXISTS email_request_settings (
+  id              TINYINT UNSIGNED PRIMARY KEY,
+  short_greeting  VARCHAR(100) NOT NULL DEFAULT 'Hi system, for assistance',
+  short_closing   VARCHAR(100) NOT NULL DEFAULT 'Thanks and regards',
+  formal_greeting VARCHAR(100) NOT NULL DEFAULT 'Hi Maam/Sir',
+  formal_intro    VARCHAR(100) NOT NULL DEFAULT 'For assistance',
+  formal_closing  VARCHAR(100) NOT NULL DEFAULT 'Thank you',
+  updated_by      INT UNSIGNED NULL,
+  updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_email_settings_user FOREIGN KEY (updated_by) REFERENCES users(user_id) ON DELETE SET NULL
+);
+
+INSERT IGNORE INTO email_request_settings (id) VALUES (1);
+
+-- 3. Recipients listed as checkboxes on the generators. group_tag: which generator uses them (ALL = both).
+CREATE TABLE IF NOT EXISTS email_recipients (
+  id           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  display_name VARCHAR(100) NOT NULL DEFAULT '',
+  email        VARCHAR(255) NOT NULL,
+  group_tag    ENUM('ATW', 'SERVICE', 'ALL') NOT NULL DEFAULT 'ALL',
+  is_active    TINYINT(1)   NOT NULL DEFAULT 1,              -- off for addresses that bounce
+  sort_order   SMALLINT     NOT NULL DEFAULT 0,
+  notes        VARCHAR(255) NULL,                            -- e.g. "bounced 10/15/2026"
+  updated_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_email_recipients_group_email (group_tag, email),
+  KEY idx_email_recipients_order (group_tag, sort_order)
+);
+
+INSERT IGNORE INTO email_recipients (display_name, email, group_tag, sort_order) VALUES
+  ('ECS POS HelpDesk',                 'poshelpdesk@equicom.com',                  'ATW', 10),
+  ('Merchant Services POS Helpdesk',   'merchant-services-poshelpdesk@bdo.com.ph', 'ATW', 20),
+  ('ECS POS HelpDesk',                 'phrobines@equicom.com',                    'ATW', 30),
+  ('ECS POS HelpDesk',                 'mjmalacad@equicom.com',                    'ATW', 40),
+  ('ECS POS Helpdesk Group',           'ecsposhelpdeskgroup@equicom.com',          'ATW', 50),
+  ('ECS POS HelpDesk',                 'amendoza@equicom.com',                     'ATW', 60),
+  ('BDO',                              'cashagad-helpdesk@bdo.com.ph',             'ATW', 70),
+  ('ECS POS HelpDesk',                 'lbasangan@equicom.com',                    'ATW', 80),
+  ('ECS POS HelpDesk',                 'avillar@equicom.com',                      'ATW', 90),
+  ('ECS POS HelpDesk',                 'ECSPOSHelpdesk@equicom.com',               'ATW', 100);
+
+-- 4. Service Request emails (My Requests / admin history).
+CREATE TABLE IF NOT EXISTS service_requests (
+  id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id     INT UNSIGNED NOT NULL,
+  terminal_id INT UNSIGNED NULL,
+  tn          VARCHAR(30)  NULL,                    -- ticket number
+  model       VARCHAR(50)  NULL,
+  sn          VARCHAR(50)  NULL,
+  tid         VARCHAR(20)  NULL,
+  merchant    VARCHAR(150) NULL,
+  actions     VARCHAR(500) NOT NULL,                -- requested actions, combined
+  template    ENUM('short', 'formal') NOT NULL,
+  recipients  TEXT         NULL,                    -- "Name <email>, ..." as copied
+  subject     VARCHAR(255) NOT NULL,
+  body        TEXT         NOT NULL,                -- the email exactly as copied
+  created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_email_requests_user_date (user_id, created_at),
+  KEY idx_email_requests_date (created_at),
+  CONSTRAINT fk_email_requests_user     FOREIGN KEY (user_id)     REFERENCES users(user_id) ON DELETE CASCADE,
+  CONSTRAINT fk_email_requests_terminal FOREIGN KEY (terminal_id) REFERENCES terminals(terminal_id) ON DELETE SET NULL
+);
+
+-- 5. ATW Request emails.
+CREATE TABLE IF NOT EXISTS atw_requests (
+  id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id     INT UNSIGNED NOT NULL,
+  ticket_no   VARCHAR(30)  NOT NULL,                  -- first ticket (for search and the subject)
+  merchant    VARCHAR(150) NOT NULL,                  -- first merchant
+  merchants   TEXT         NOT NULL,                  -- JSON list of {ticket, name, address}
+  date_from   DATE         NOT NULL,
+  date_to     DATE         NOT NULL,
+  fe_names    VARCHAR(500) NOT NULL,                  -- "Name , Name , Name"
+  address     VARCHAR(255) NULL,
+  recipients  TEXT         NULL,
+  subject     VARCHAR(255) NOT NULL,
+  body        TEXT         NOT NULL,
+  created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_atw_requests_user_date (user_id, created_at),
+  KEY idx_atw_requests_date (created_at),
+  CONSTRAINT fk_atw_requests_user FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+);
+
+-- ===== SERIAL INVENTORY (see database/migrations/2026_10_19_serial_inventory*.sql) =====
+-- Register of serial numbers from terminal / device labels (QR or barcode): each serial
+-- once, with the date it was first registered. No user, location or terminal link.
+
+CREATE TABLE IF NOT EXISTS serial_inventory (
+  id              INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  serial          VARCHAR(100) NOT NULL,
+  registered_date DATE         NOT NULL,
+  UNIQUE KEY uq_serial_inventory_serial (serial),
+  KEY idx_serial_inventory_date (registered_date)
+);

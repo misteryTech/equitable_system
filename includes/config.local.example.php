@@ -10,3 +10,7 @@ define('DB_PORT', 3306);            // XAMPP default is 3306
 define('DB_NAME', 'equitable_system');
 define('DB_USER', 'root');
 define('DB_PASS', '');              // your MySQL password
+
+// Optional: send phones that open the Scan page over http:// to https:// (camera needs HTTPS).
+// Turn on only after HTTPS works — see docs/HTTPS_SETUP.md.
+// define('SCAN_FORCE_HTTPS', true);

@@ -28,6 +28,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $lastName   = trim($_POST['last_name'] ?? '');
     $username   = trim($_POST['username'] ?? '');
     $email      = trim($_POST['email'] ?? '');
+    $mobile     = trim(preg_replace('/\s+/', ' ', $_POST['mobile_number'] ?? ''));
+    $area       = trim(preg_replace('/\s+/', ' ', $_POST['area'] ?? ''));
 
     // Optional profile picture: checked now, stored only once everything else is valid.
     [$pictureError, $hasPicture] = profile_picture_check($_FILES['profile_picture'] ?? null);
@@ -65,6 +67,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'Last name'     => [$lastName, 50],
         'Username'      => [$username, 30],
         'Email address' => [$email, 100],
+        'Area'          => [$area, 100],
     ];
     foreach ($maxLengths as $label => [$value, $max]) {
         if (mb_strlen($value) > $max) {
@@ -77,6 +80,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
         $errors[] = 'Email address is not valid.';
+    }
+    if ($mobile !== '' && !preg_match(MOBILE_PATTERN, $mobile)) {
+        $errors[] = 'Mobile number is not valid (e.g. 09171234567).';
     }
     if ($username !== '' && !preg_match('/^[A-Za-z0-9_.]+$/', $username)) {
         $errors[] = 'Username may only contain letters, numbers, dots and underscores.';
@@ -115,9 +121,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $picture = $hasPicture ? profile_picture_store($_FILES['profile_picture']) : null;
         try {
             $insert = db()->prepare(
-                'INSERT INTO users (role, status, reviewed_by, reviewed_at, field_engineer_id, location, profile_picture,
+                'INSERT INTO users (role, status, reviewed_by, reviewed_at, field_engineer_id, location, mobile_number, area, profile_picture,
                                     first_name, middle_name, last_name, username, email, password_hash)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
             );
             // Self-registrations wait for admin approval; accounts an admin creates are approved right away.
             $insert->execute([
@@ -127,6 +133,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $adminMode ? date('Y-m-d H:i:s') : null,
                 $engineerId === '' ? null : $engineerId,
                 $location,
+                $mobile === '' ? null : $mobile,
+                $area === '' ? null : $area,
                 $picture,
                 $firstName,
                 $middleName === '' ? null : $middleName,

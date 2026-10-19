@@ -1,6 +1,7 @@
 <?php
 /**
- * Terminals: register terminals (name, up to 3 photos, brand, label, BDO / Non-BDO).
+ * Terminals: register terminals (name, up to 3 photos, brand, model, label, BDO / Non-BDO,
+ * current version). Labels come from the terminal_labels table (Terminal Labels page).
  * Everyone signed in can view and search; admins add, edit and delete
  * through the modal (saved with AJAX, JSON response).
  */
@@ -28,8 +29,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     $action = $_POST['action'] ?? '';
-    $id     = (int) ($_POST['terminal_id'] ?? 0);
 
+    // "+ Add new label" in the form's Label dropdown.
+    if ($action === 'add_label') {
+        [$labelId, $error] = terminal_label_add((string) ($_POST['name'] ?? ''));
+        if ($error) {
+            $respond(['errors' => [$error]], 422);
+        }
+        $respond(['ok' => true, 'id' => $labelId, 'name' => terminal_label_clean((string) $_POST['name'])]);
+    }
+
+    $id       = (int) ($_POST['terminal_id'] ?? 0);
     $existing = null;
     if ($id) {
         $stmt = db()->prepare('SELECT * FROM terminals WHERE terminal_id = ?');
@@ -57,30 +67,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $respond(['errors' => ['Unknown action.']], 400);
     }
 
-    $name   = preg_replace('/\s+/', ' ', trim((string) ($_POST['terminal_name'] ?? '')));
-    $brand  = preg_replace('/\s+/', ' ', trim((string) ($_POST['brand'] ?? '')));
-    $label  = (string) ($_POST['label'] ?? '');
-    $bank   = (string) ($_POST['bank_type'] ?? '');
+    [$values, $errors] = terminal_validate($_POST, terminal_labels(), $existing ? (int) $existing['label_id'] : null);
+    $name   = $values['terminal_name'];
     $remove = array_map('intval', (array) ($_POST['remove_slot'] ?? []));
-    $errors = [];
 
-    if ($name === '' || mb_strlen($name) > 100) {
-        $errors[] = 'Terminal name is required (up to 100 characters).';
-    } else {
+    if ($name !== '' && !$errors) {
         $stmt = db()->prepare('SELECT 1 FROM terminals WHERE terminal_name = ? AND terminal_id <> ?');
         $stmt->execute([$name, $id]);
         if ($stmt->fetchColumn()) {
             $errors[] = "A terminal named \"$name\" is already registered.";
         }
-    }
-    if ($brand === '' || mb_strlen($brand) > 100) {
-        $errors[] = 'Brand is required (up to 100 characters).';
-    }
-    if (!in_array($label, TERMINAL_LABELS, true)) {
-        $errors[] = 'Please choose a label: ' . implode(', ', TERMINAL_LABELS) . '.';
-    }
-    if (!array_key_exists($bank, TERMINAL_BANKS)) {
-        $errors[] = 'Please choose BDO or Non-BDO.';
     }
 
     // Each of the 3 slots: a new upload replaces that slot's photo; "remove" clears it.
@@ -103,15 +99,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stored[$slot] = terminal_image_store($file);
     }
 
+    $nullable = static fn(string $v): ?string => $v === '' ? null : $v;
+    $fields   = [$name, $values['brand'], $nullable($values['model']), $nullable($values['current_version']), $values['label_id'], $values['bank_type']];
+
     $pdo = db();
     $pdo->beginTransaction();
     try {
         if ($existing) {
-            $pdo->prepare('UPDATE terminals SET terminal_name = ?, brand = ?, label = ?, bank_type = ? WHERE terminal_id = ?')
-                ->execute([$name, $brand, $label, $bank, $id]);
+            $pdo->prepare('UPDATE terminals SET terminal_name = ?, brand = ?, model = ?, current_version = ?, label_id = ?, bank_type = ? WHERE terminal_id = ?')
+                ->execute([...$fields, $id]);
         } else {
-            $pdo->prepare('INSERT INTO terminals (terminal_name, brand, label, bank_type, created_by) VALUES (?, ?, ?, ?, ?)')
-                ->execute([$name, $brand, $label, $bank, $user['user_id']]);
+            $pdo->prepare('INSERT INTO terminals (terminal_name, brand, model, current_version, label_id, bank_type, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)')
+                ->execute([...$fields, $user['user_id']]);
             $id = (int) $pdo->lastInsertId();
         }
 
@@ -152,22 +151,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $flash = $_SESSION['flash'] ?? null;
 unset($_SESSION['flash']);
 
-// Filters
-$q     = trim((string) ($_GET['q'] ?? ''));
-$label = in_array($_GET['label'] ?? '', TERMINAL_LABELS, true) ? $_GET['label'] : '';
-$bank  = array_key_exists($_GET['bank'] ?? '', TERMINAL_BANKS) ? $_GET['bank'] : '';
+$labels       = terminal_labels();
+$activeLabels = array_filter($labels, fn($l) => $l['is_active']);
 
-$sql    = 'SELECT t.*, CONCAT(u.first_name, \' \', u.last_name) AS created_by_name
-           FROM terminals t LEFT JOIN users u ON u.user_id = t.created_by WHERE 1 = 1';
+// Filters
+$q       = trim((string) ($_GET['q'] ?? ''));
+$labelId = isset($labels[(int) ($_GET['label'] ?? 0)]) ? (int) $_GET['label'] : 0;
+$bank    = array_key_exists($_GET['bank'] ?? '', TERMINAL_BANKS) ? $_GET['bank'] : '';
+
+$sql    = 'SELECT t.*, l.name AS label_name, CONCAT(u.first_name, \' \', u.last_name) AS created_by_name
+           FROM terminals t
+           JOIN terminal_labels l ON l.id = t.label_id
+           LEFT JOIN users u ON u.user_id = t.created_by WHERE 1 = 1';
 $params = [];
 if ($q !== '') {
-    $sql .= ' AND (t.terminal_name LIKE ? OR t.brand LIKE ?)';
+    $sql .= ' AND (t.terminal_name LIKE ? OR t.brand LIKE ? OR t.model LIKE ? OR t.current_version LIKE ?)';
     $like = '%' . addcslashes($q, '%_\\') . '%';
-    array_push($params, $like, $like);
+    array_push($params, ...array_fill(0, 4, $like));
 }
-if ($label !== '') {
-    $sql .= ' AND t.label = ?';
-    $params[] = $label;
+if ($labelId) {
+    $sql .= ' AND t.label_id = ?';
+    $params[] = $labelId;
 }
 if ($bank !== '') {
     $sql .= ' AND t.bank_type = ?';
@@ -208,14 +212,14 @@ require __DIR__ . '/includes/sidebar.php';
           <form method="get" class="row g-2 align-items-end mb-3">
             <div class="col-md-4">
               <label for="q" class="form-label">Search</label>
-              <input type="search" name="q" id="q" class="form-control" placeholder="Terminal name or brand" value="<?= e($q) ?>">
+              <input type="search" name="q" id="q" class="form-control" placeholder="Name, brand, model or version" value="<?= e($q) ?>">
             </div>
             <div class="col-6 col-md-2">
               <label for="fLabel" class="form-label">Label</label>
               <select name="label" id="fLabel" class="form-select">
                 <option value="">All</option>
-<?php foreach (TERMINAL_LABELS as $l): ?>
-                <option value="<?= e($l) ?>" <?= $label === $l ? 'selected' : '' ?>><?= e($l) ?></option>
+<?php foreach ($labels as $l): ?>
+                <option value="<?= (int) $l['id'] ?>" <?= $labelId === $l['id'] ? 'selected' : '' ?>><?= e($l['name']) ?><?= $l['is_active'] ? '' : ' (inactive)' ?></option>
 <?php endforeach; ?>
               </select>
             </div>
@@ -228,9 +232,9 @@ require __DIR__ . '/includes/sidebar.php';
 <?php endforeach; ?>
               </select>
             </div>
-            <div class="col-md-4 d-flex gap-2">
+            <div class="col-md-4 d-flex flex-wrap gap-2">
               <button type="submit" class="btn btn-primary"><i class="bi bi-funnel"></i> Filter</button>
-<?php if ($q !== '' || $label !== '' || $bank !== ''): ?>
+<?php if ($q !== '' || $labelId || $bank !== ''): ?>
               <a href="terminals.php" class="btn btn-outline-secondary">Clear</a>
 <?php endif; ?>
 <?php if ($isAdmin): ?>
@@ -247,7 +251,7 @@ require __DIR__ . '/includes/sidebar.php';
                 <tr>
                   <th>Photos</th>
                   <th>Terminal Name</th>
-                  <th>Brand</th>
+                  <th>Model / Brand</th>
                   <th>Label</th>
                   <th>Bank</th>
                   <th class="d-none d-md-table-cell">Registered</th>
@@ -274,8 +278,11 @@ require __DIR__ . '/includes/sidebar.php';
                     </div>
                   </td>
                   <td class="fw-semibold"><?= e($t['terminal_name']) ?></td>
-                  <td><?= e($t['brand']) ?></td>
-                  <td><?= terminal_label_badge($t['label']) ?></td>
+                  <td>
+                    <?= e($t['model'] ?? '') ?><?= $t['model'] ? '<br>' : '' ?>
+                    <span class="small text-muted"><?= e($t['brand']) ?><?= $t['current_version'] ? ' · v' . e($t['current_version']) : '' ?></span>
+                  </td>
+                  <td><?= terminal_label_badge((int) $t['label_id'], $t['label_name']) ?></td>
                   <td><?= terminal_bank_badge($t['bank_type']) ?></td>
                   <td class="small text-muted d-none d-md-table-cell">
                     <?= e(date('M j, Y', strtotime($t['created_at']))) ?><?= $t['created_by_name'] ? ' by ' . e($t['created_by_name']) : '' ?>
@@ -284,7 +291,8 @@ require __DIR__ . '/includes/sidebar.php';
                   <td class="text-end">
                     <button type="button" class="btn btn-sm btn-outline-primary edit-terminal"
                             data-id="<?= (int) $t['terminal_id'] ?>" data-name="<?= e($t['terminal_name']) ?>" data-brand="<?= e($t['brand']) ?>"
-                            data-label="<?= e($t['label']) ?>" data-bank="<?= e($t['bank_type']) ?>"
+                            data-model="<?= e($t['model'] ?? '') ?>" data-version="<?= e($t['current_version'] ?? '') ?>"
+                            data-label="<?= (int) $t['label_id'] ?>" data-label-name="<?= e($t['label_name']) ?>" data-bank="<?= e($t['bank_type']) ?>"
                             data-photos="<?= e(json_encode(array_map(fn($p) => $p['url'], $tPhotos))) ?>">
                       <i class="bi bi-pencil"></i> Edit
                     </button>
@@ -323,6 +331,18 @@ require __DIR__ . '/includes/sidebar.php';
           <input type="hidden" name="terminal_id" id="tmId" value="">
           <div class="alert alert-danger d-none" id="terminalErrors" role="alert"></div>
 
+          <div class="alert alert-light border small mb-3">
+            <div class="fw-semibold mb-1">Fill in the details</div>
+            <p class="mb-1">Four fields are required: <strong>Terminal Name</strong>, <strong>Brand</strong>, <strong>Label</strong> and <strong>Bank</strong>.</p>
+            <ul class="mb-0 ps-3">
+              <li><strong>Terminal Name</strong>: a unique name for this unit; no two terminals can share one.</li>
+              <li><strong>Brand</strong> and <strong>Model</strong>: as printed on the device, e.g. PAX and S1F2, or Ingenico and DX8000.</li>
+              <li><strong>Label</strong>: choose from the list. Admins can add new labels.</li>
+              <li><strong>Bank</strong>: BDO or Non-BDO.</li>
+              <li><strong>Current Version</strong>: optional, the software version now on the terminal.</li>
+            </ul>
+          </div>
+
           <div class="row g-3">
             <div class="col-12">
               <label for="tmName" class="form-label">Terminal Name</label>
@@ -351,19 +371,30 @@ require __DIR__ . '/includes/sidebar.php';
               </div>
             </div>
 
-            <div class="col-12">
+            <div class="col-md-6">
               <label for="tmBrand" class="form-label">Brand</label>
               <input type="text" name="brand" id="tmBrand" class="form-control" maxlength="100" placeholder="e.g. Verifone, Ingenico, PAX" required>
+            </div>
+            <div class="col-md-6">
+              <label for="tmModel" class="form-label">Model <span class="text-muted small">(optional)</span></label>
+              <input type="text" name="model" id="tmModel" class="form-control" maxlength="50" placeholder="e.g. DX8000, S1F2">
             </div>
 
             <div class="col-md-6">
               <label for="tmLabel" class="form-label">Label</label>
-              <select name="label" id="tmLabel" class="form-select" required>
+              <select name="label_id" id="tmLabel" class="form-select" required>
                 <option value="" disabled selected>Select a label</option>
-<?php foreach (TERMINAL_LABELS as $l): ?>
-                <option value="<?= e($l) ?>"><?= e($l) ?></option>
+<?php foreach ($activeLabels as $l): ?>
+                <option value="<?= (int) $l['id'] ?>"><?= e($l['name']) ?></option>
 <?php endforeach; ?>
+                <option value="__new">+ Add new label…</option>
               </select>
+              <div class="input-group input-group-sm mt-2 d-none" id="tmNewLabelWrap">
+                <input type="text" id="tmNewLabel" class="form-control" maxlength="<?= TERMINAL_LABEL_MAX ?>" placeholder="New label name" aria-label="New label name">
+                <button type="button" class="btn btn-primary" id="tmNewLabelAdd">Add</button>
+                <button type="button" class="btn btn-outline-secondary" id="tmNewLabelCancel">Cancel</button>
+              </div>
+              <div class="form-text"><a href="terminal_labels.php">Manage labels</a></div>
             </div>
 
             <div class="col-md-6">
@@ -374,6 +405,11 @@ require __DIR__ . '/includes/sidebar.php';
                 <label class="btn btn-outline-<?= $key === 'bdo' ? 'success' : 'warning' ?>" for="tmBank_<?= e($key) ?>"><?= e($text) ?></label>
 <?php endforeach; ?>
               </div>
+            </div>
+
+            <div class="col-md-6">
+              <label for="tmVersion" class="form-label">Current Version <span class="text-muted small">(optional)</span></label>
+              <input type="text" name="current_version" id="tmVersion" class="form-control" maxlength="30" placeholder="e.g. 16.20">
             </div>
           </div>
         </div>
@@ -392,7 +428,11 @@ require __DIR__ . '/includes/sidebar.php';
       var form = document.getElementById("terminalForm");
       var errors = document.getElementById("terminalErrors");
       var save = document.getElementById("tmSave");
+      var labelSelect = document.getElementById("tmLabel");
+      var newLabelWrap = document.getElementById("tmNewLabelWrap");
+      var newLabelInput = document.getElementById("tmNewLabel");
       var slots = Array.prototype.slice.call(form.querySelectorAll(".photo-slot"));
+      var lastLabel = "";
 
       function modal() { return bootstrap.Modal.getOrCreateInstance(document.getElementById("terminalModal")); }
 
@@ -405,6 +445,65 @@ require __DIR__ . '/includes/sidebar.php';
         errors.classList.remove("d-none");
         errors.scrollIntoView({ block: "nearest" });
       }
+
+      /* ---------- Label dropdown (+ Add new label) ---------- */
+
+      function newOption() { return labelSelect.querySelector('option[value="__new"]'); }
+
+      function addLabelOption(id, name, extra) {
+        var o = document.createElement("option");
+        o.value = String(id);
+        o.textContent = name + (extra || "");
+        labelSelect.insertBefore(o, newOption());
+        return o;
+      }
+
+      labelSelect.addEventListener("change", function () {
+        if (labelSelect.value === "__new") {
+          newLabelWrap.classList.remove("d-none");
+          newLabelInput.value = "";
+          newLabelInput.focus();
+        } else {
+          lastLabel = labelSelect.value;
+          newLabelWrap.classList.add("d-none");
+        }
+      });
+
+      function closeNewLabel() {
+        newLabelWrap.classList.add("d-none");
+        labelSelect.value = lastLabel;
+      }
+      document.getElementById("tmNewLabelCancel").addEventListener("click", closeNewLabel);
+
+      function addNewLabel() {
+        var name = newLabelInput.value.trim();
+        if (!name) { newLabelInput.focus(); return; }
+        var btn = document.getElementById("tmNewLabelAdd");
+        btn.disabled = true;
+        var body = new FormData();
+        body.append("csrf_token", csrf);
+        body.append("action", "add_label");
+        body.append("name", name);
+        post(body)
+          .then(function (data) {
+            addLabelOption(data.id, data.name);
+            lastLabel = String(data.id);
+            labelSelect.value = lastLabel;
+            newLabelWrap.classList.add("d-none");
+            // Keep the Label filter in step too.
+            var filter = document.getElementById("fLabel");
+            var o = document.createElement("option"); o.value = String(data.id); o.textContent = data.name; filter.append(o);
+          })
+          .catch(function (err) { showErrors(Array.isArray(err) ? err : ["Could not add the label."]); })
+          .then(function () { btn.disabled = false; });
+      }
+      document.getElementById("tmNewLabelAdd").addEventListener("click", addNewLabel);
+      newLabelInput.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); addNewLabel(); }
+        if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeNewLabel(); }
+      });
+
+      /* ---------- Photos ---------- */
 
       // Each slot remembers the saved photo (data-current) so "Undo" and "Remove" can switch back.
       function renderSlot(slot) {
@@ -434,14 +533,25 @@ require __DIR__ . '/includes/sidebar.php';
         slot.querySelector(".slot-clear").addEventListener("click", function () { input.value = ""; renderSlot(slot); });
       });
 
+      /* ---------- Open / save / delete ---------- */
+
       function open(data) {
         form.reset();
         errors.classList.add("d-none");
+        newLabelWrap.classList.add("d-none");
+        labelSelect.querySelectorAll("option[data-inactive]").forEach(function (o) { o.remove(); });
         document.getElementById("terminalModalTitle").textContent = data ? "Edit Terminal" : "Register Terminal";
         document.getElementById("tmId").value = data ? data.id : "";
         document.getElementById("tmName").value = data ? data.name : "";
         document.getElementById("tmBrand").value = data ? data.brand : "";
-        document.getElementById("tmLabel").value = data ? data.label : "";
+        document.getElementById("tmModel").value = data ? data.model : "";
+        document.getElementById("tmVersion").value = data ? data.version : "";
+        // A terminal may keep a label that has since been deactivated.
+        if (data && !labelSelect.querySelector('option[value="' + data.label + '"]')) {
+          addLabelOption(data.label, data.labelName, " (inactive)").setAttribute("data-inactive", "");
+        }
+        lastLabel = data ? data.label : "";
+        labelSelect.value = lastLabel;
         form.querySelectorAll('input[name="bank_type"]').forEach(function (r) { r.checked = !!data && r.value === data.bank; });
         var saved = data ? JSON.parse(data.photos || "{}") : {};
         slots.forEach(function (slot) {
@@ -465,6 +575,7 @@ require __DIR__ . '/includes/sidebar.php';
       form.addEventListener("submit", function (e) {
         e.preventDefault();
         errors.classList.add("d-none");
+        if (labelSelect.value === "__new") { showErrors(["Add the new label first, or choose one from the list."]); return; }
         save.disabled = true;
         post(new FormData(form))
           .then(function () { location.reload(); })

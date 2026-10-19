@@ -81,6 +81,16 @@
                       <input type="email" name="email" class="form-control" id="yourEmail" value="<?= old('email') ?>" maxlength="100" required>
                     </div>
 
+                    <div class="col-md-6">
+                      <label for="mobileNumber" class="form-label">Mobile Number <span class="text-muted small">(optional)</span></label>
+                      <input type="tel" name="mobile_number" class="form-control" id="mobileNumber" value="<?= old('mobile_number') ?>" maxlength="20" placeholder="e.g. 09171234567">
+                    </div>
+
+                    <div class="col-md-6">
+                      <label for="area" class="form-label">Area / Assignment <span class="text-muted small">(optional)</span></label>
+                      <input type="text" name="area" class="form-control" id="area" value="<?= old('area') ?>" maxlength="100" placeholder="e.g. Cotabato City">
+                    </div>
+
                     <div class="col-12">
                       <label for="yourUsername" class="form-label">Username</label>
                       <div class="input-group">

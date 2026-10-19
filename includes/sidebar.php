@@ -30,6 +30,8 @@ $menu = [
     ['key' => 'locations',          'label' => 'Locations',          'icon' => 'bi-geo-alt',        'href' => 'locations.php',          'roles' => ['admin']],
     ['key' => 'engineer-schedules', 'label' => 'User Schedules',     'icon' => 'bi-calendar-week', 'href' => 'engineer_schedules.php', 'roles' => ['admin']],
     ['key' => 'time-settings',      'label' => 'Time Settings',      'icon' => 'bi-sliders',        'href' => 'time_settings.php',      'roles' => ['admin']],
+    ['key' => 'email-recipients',   'label' => 'Email Recipients',   'icon' => 'bi-envelope-at',    'href' => 'email_recipients.php',   'roles' => ['admin']],
+    ['key' => 'email-templates',    'label' => 'Email Templates',    'icon' => 'bi-card-text',      'href' => 'email_templates.php',    'roles' => ['admin']],
 
     ['heading' => 'Transportation'],
 
@@ -42,6 +44,18 @@ $menu = [
     ['heading' => 'Terminals'],
 
     ['key' => 'terminals', 'label' => 'Terminals', 'icon' => 'bi-credit-card-2-front', 'href' => 'terminals.php'],
+    ['key' => 'terminal-labels', 'label' => 'Terminal Labels', 'icon' => 'bi-tags', 'href' => 'terminal_labels.php', 'roles' => ['admin']],
+
+    ['heading' => 'Serial Inventory', 'roles' => ['field_engineer', 'admin']],
+
+    ['key' => 'serial-scan',    'label' => 'Scan',    'icon' => 'bi-upc-scan', 'href' => 'serial_scan.php',    'roles' => ['field_engineer', 'admin']],
+    ['key' => 'serial-records', 'label' => 'Records', 'icon' => 'bi-list-ol',  'href' => 'serial_records.php', 'roles' => ['field_engineer', 'admin']],
+
+    ['heading' => 'Email Generator', 'roles' => ['field_engineer', 'admin']],
+
+    ['key' => 'service-request', 'label' => 'Service Request', 'icon' => 'bi-envelope-paper', 'href' => 'service_request.php', 'roles' => ['field_engineer', 'admin']],
+    ['key' => 'atw-request',     'label' => 'ATW Request',     'icon' => 'bi-envelope-plus',  'href' => 'atw_request.php',     'roles' => ['field_engineer', 'admin']],
+    ['key' => 'my-requests',     'label' => is_admin($sidebarUser) ? 'Email Requests' : 'My Requests', 'icon' => 'bi-envelope-check', 'href' => 'my_requests.php', 'roles' => ['field_engineer', 'admin']],
 
     ['heading' => 'Account'],
 
@@ -103,3 +117,27 @@ $menu = array_filter($menu, fn($item) => !isset($item['roles']) || in_array($sid
     </ul>
 
   </aside><!-- End Sidebar -->
+  <script>
+    // Keep the sidebar's scroll position when opening another page, so it doesn't jump back to the top.
+    (function () {
+      var sidebar = document.getElementById("sidebar");
+      var saved = null;
+      try { saved = sessionStorage.getItem("sidebarScroll"); } catch (e) {}
+      if (saved !== null) {
+        sidebar.scrollTop = parseInt(saved, 10) || 0;
+      }
+      // First visit (or the position was lost): make sure the current page's link is visible.
+      var active = sidebar.querySelector(".nav-link:not(.collapsed), .nav-content a.active");
+      if (active) {
+        var box = sidebar.getBoundingClientRect(), link = active.getBoundingClientRect();
+        if (link.top < box.top || link.bottom > box.bottom) {
+          sidebar.scrollTop += link.top - box.top - box.height / 2 + link.height / 2;
+        }
+      }
+      function remember() {
+        try { sessionStorage.setItem("sidebarScroll", String(sidebar.scrollTop)); } catch (e) {}
+      }
+      sidebar.addEventListener("click", remember);
+      window.addEventListener("pagehide", remember);
+    })();
+  </script>

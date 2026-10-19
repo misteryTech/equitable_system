@@ -5,6 +5,9 @@
  * data-bs-toggle="modal" data-bs-target="#profileModal".
  * Expects $headerUser (current_user()).
  */
+
+// Declared for the editor's code checker; includes/header.php sets it.
+/** @var array $headerUser */
 ?>
   <div class="modal fade" id="profileModal" tabindex="-1" aria-labelledby="profileModalTitle" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg">
@@ -54,6 +57,15 @@
               <label for="pmEmail" class="form-label">Email Address</label>
               <input type="email" name="email" id="pmEmail" class="form-control" maxlength="100" required value="<?= e($headerUser['email']) ?>">
             </div>
+            <div class="col-md-6">
+              <label for="pmMobile" class="form-label">Mobile Number</label>
+              <input type="tel" name="mobile_number" id="pmMobile" class="form-control" maxlength="20" placeholder="e.g. 09171234567" value="<?= e($headerUser['mobile_number'] ?? '') ?>">
+            </div>
+            <div class="col-md-6">
+              <label for="pmArea" class="form-label">Area / Assignment</label>
+              <input type="text" name="area" id="pmArea" class="form-control" maxlength="100" placeholder="e.g. Cotabato City" value="<?= e($headerUser['area'] ?? '') ?>">
+            </div>
+            <div class="col-12 form-text mt-1">Your name (as "First M. Last"), mobile number and area are used in the sign-off of Email Generator emails ("F.E <?= e(mb_strtoupper($headerUser['area'] ?? '') ?: 'AREA') ?>", "<?= e(mb_strtoupper($headerUser['area'] ?? '') ?: 'AREA') ?> FE").</div>
 
             <!-- Admin-controlled details (read only) -->
             <div class="col-12">

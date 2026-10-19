@@ -1,6 +1,7 @@
 <?php
 /**
- * Admin: register and manage locations (the Location dropdown on registration).
+ * Admin: register and manage locations (the Location dropdown on registration)
+ * and their addresses (the "Address:" line of ATW Request emails).
  * users.location stores the location name, so renaming a location also updates
  * its users, and a location can't be deleted while users are assigned to it.
  */
@@ -31,31 +32,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     $id     = (int) ($_POST['location_id'] ?? 0);
     $name   = preg_replace('/\s+/', ' ', trim((string) ($_POST['name'] ?? '')));
+    $address = preg_replace('/\s+/', ' ', trim((string) ($_POST['address'] ?? '')));
+    $addressError = mb_strlen($address) > 255 ? 'Address must be at most 255 characters.' : null;
 
     if (!csrf_verify()) {
         $errors[] = 'Your session expired. Please try again.';
     } elseif ($action === 'add') {
-        if ($error = location_name_error($name)) {
+        if ($error = location_name_error($name) ?? $addressError) {
             $errors[] = $error;
         } else {
-            db()->prepare('INSERT INTO locations (name) VALUES (?)')->execute([$name]);
+            db()->prepare('INSERT INTO locations (name, address) VALUES (?, ?)')->execute([$name, $address === '' ? null : $address]);
             $_SESSION['flash'] = ['success', "Location \"$name\" added. It now appears in the registration dropdown."];
             redirect('locations.php');
         }
     } elseif ($action === 'rename') {
-        $stmt = db()->prepare('SELECT name FROM locations WHERE location_id = ?');
+        $stmt = db()->prepare('SELECT name, address FROM locations WHERE location_id = ?');
         $stmt->execute([$id]);
-        $oldName = $stmt->fetchColumn();
+        $old     = $stmt->fetch();
+        $oldName = $old ? $old['name'] : false;
 
         if ($oldName === false) {
             $errors[] = 'Location not found.';
-        } elseif ($error = location_name_error($name, $id)) {
+        } elseif ($error = location_name_error($name, $id) ?? $addressError) {
             $errors[] = $error;
+        } elseif ($name === $oldName && $address !== (string) $old['address']) {
+            db()->prepare('UPDATE locations SET address = ? WHERE location_id = ?')->execute([$address === '' ? null : $address, $id]);
+            $_SESSION['flash'] = ['success', "Address of \"$name\" saved."];
+            redirect('locations.php');
         } elseif ($name !== $oldName) {
             $pdo = db();
             $pdo->beginTransaction();
             try {
-                $pdo->prepare('UPDATE locations SET name = ? WHERE location_id = ?')->execute([$name, $id]);
+                $pdo->prepare('UPDATE locations SET name = ?, address = ? WHERE location_id = ?')->execute([$name, $address === '' ? null : $address, $id]);
                 $moved = $pdo->prepare('UPDATE users SET location = ? WHERE location = ?');
                 $moved->execute([$name, $oldName]);
                 $pdo->commit();
@@ -95,7 +103,7 @@ $flash = $_SESSION['flash'] ?? null;
 unset($_SESSION['flash']);
 
 $locations = db()->query(
-    'SELECT l.location_id, l.name, l.created_at, COUNT(u.user_id) AS user_count
+    'SELECT l.location_id, l.name, l.address, l.created_at, COUNT(u.user_id) AS user_count
      FROM locations l
      LEFT JOIN users u ON u.location = l.name
      GROUP BY l.location_id
@@ -141,6 +149,12 @@ require __DIR__ . '/includes/sidebar.php';
                          placeholder="e.g. Cebu Depot" value="<?= ($_POST['action'] ?? '') === 'add' ? old('name') : '' ?>" required>
                 </div>
                 <div class="col-12">
+                  <label for="locationAddress" class="form-label">Address <span class="text-muted small">(optional)</span></label>
+                  <input type="text" name="address" id="locationAddress" class="form-control" maxlength="255"
+                         placeholder="e.g. C/O 3F BDO PIONEER, Pioneer Ave, General Santos City" value="<?= ($_POST['action'] ?? '') === 'add' ? old('address') : '' ?>">
+                  <div class="form-text">Used as the "Address:" line of ATW Request emails.</div>
+                </div>
+                <div class="col-12">
                   <button type="submit" class="btn btn-primary w-100"><i class="bi bi-plus-lg"></i> Add Location</button>
                 </div>
               </form>
@@ -158,7 +172,7 @@ require __DIR__ . '/includes/sidebar.php';
                 <table class="table align-middle text-nowrap">
                   <thead>
                     <tr>
-                      <th>Name</th>
+                      <th>Name / Address</th>
                       <th class="text-end">Users</th>
                       <th>Added</th>
                       <th class="text-end">Action</th>
@@ -169,12 +183,15 @@ require __DIR__ . '/includes/sidebar.php';
     $formId = 'rename' . (int) $loc['location_id'];
 ?>
                     <tr>
-                      <td style="min-width: 12rem">
+                      <td style="min-width: 18rem">
                         <form method="post" id="<?= $formId ?>" class="d-flex gap-2">
                           <?= csrf_field() ?>
                           <input type="hidden" name="action" value="rename">
                           <input type="hidden" name="location_id" value="<?= (int) $loc['location_id'] ?>">
-                          <input type="text" name="name" class="form-control form-control-sm" maxlength="100" value="<?= e($loc['name']) ?>" required aria-label="Name of <?= e($loc['name']) ?>">
+                          <div class="flex-grow-1">
+                            <input type="text" name="name" class="form-control form-control-sm mb-1" maxlength="100" value="<?= e($loc['name']) ?>" required aria-label="Name of <?= e($loc['name']) ?>">
+                            <input type="text" name="address" class="form-control form-control-sm" maxlength="255" value="<?= e($loc['address'] ?? '') ?>" placeholder="Address (for ATW emails)" aria-label="Address of <?= e($loc['name']) ?>">
+                          </div>
                         </form>
 <?php if ($loc['name'] === DEFAULT_LOCATION): ?>
                         <span class="badge bg-secondary mt-1">Default</span>
@@ -183,7 +200,7 @@ require __DIR__ . '/includes/sidebar.php';
                       <td class="text-end"><?= (int) $loc['user_count'] ?></td>
                       <td class="small text-muted"><?= e(date('M j, Y', strtotime($loc['created_at']))) ?></td>
                       <td class="text-end">
-                        <button type="submit" form="<?= $formId ?>" class="btn btn-sm btn-outline-primary" title="Save new name"><i class="bi bi-check-lg"></i> Rename</button>
+                        <button type="submit" form="<?= $formId ?>" class="btn btn-sm btn-outline-primary" title="Save name and address"><i class="bi bi-check-lg"></i> Save</button>
                         <form method="post" class="d-inline" onsubmit="return confirm('Delete location <?= e(addslashes($loc['name'])) ?>?')">
                           <?= csrf_field() ?>
                           <input type="hidden" name="action" value="delete">
@@ -201,7 +218,7 @@ require __DIR__ . '/includes/sidebar.php';
                   </tbody>
                 </table>
               </div>
-              <p class="small text-muted mb-0">Renaming a location also updates every user assigned to it. A location with users can't be deleted.</p>
+              <p class="small text-muted mb-0">Edit the name or address and press Save. Renaming a location also updates every user assigned to it. A location with users can't be deleted.</p>
             </div>
           </div>
         </div>

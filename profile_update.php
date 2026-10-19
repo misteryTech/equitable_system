@@ -1,7 +1,7 @@
 <?php
 /**
  * Save the signed-in user's own profile (Edit Profile modal, AJAX).
- * Editable: name, email, profile picture, password (needs the current password).
+ * Editable: name, email, mobile number, area, profile picture, password (needs the current password).
  * Username, role, field engineer ID and location stay admin-controlled.
  * Returns JSON: {ok: true} or {errors: [...]}.
  */
@@ -31,6 +31,8 @@ $firstName  = trim((string) ($_POST['first_name'] ?? ''));
 $middleName = trim((string) ($_POST['middle_name'] ?? ''));
 $lastName   = trim((string) ($_POST['last_name'] ?? ''));
 $email      = trim((string) ($_POST['email'] ?? ''));
+$mobile     = trim(preg_replace('/\s+/', ' ', (string) ($_POST['mobile_number'] ?? '')));
+$area       = trim(preg_replace('/\s+/', ' ', (string) ($_POST['area'] ?? '')));
 $current    = (string) ($_POST['current_password'] ?? '');
 $new        = (string) ($_POST['new_password'] ?? '');
 $confirm    = (string) ($_POST['confirm_password'] ?? '');
@@ -38,7 +40,7 @@ $removePic  = !empty($_POST['remove_picture']);
 $errors     = [];
 
 foreach (['First name' => [$firstName, 50, true], 'Middle name' => [$middleName, 50, false],
-          'Last name' => [$lastName, 50, true], 'Email address' => [$email, 100, true]] as $label => [$value, $max, $required]) {
+          'Last name' => [$lastName, 50, true], 'Email address' => [$email, 100, true], 'Area' => [$area, 100, false]] as $label => [$value, $max, $required]) {
     if ($required && $value === '') {
         $errors[] = "$label is required.";
     } elseif (mb_strlen($value) > $max) {
@@ -53,6 +55,9 @@ if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
     if ($stmt->fetchColumn()) {
         $errors[] = 'That email address is already used by another account.';
     }
+}
+if ($mobile !== '' && !preg_match(MOBILE_PATTERN, $mobile)) {
+    $errors[] = 'Mobile number is not valid (e.g. 09171234567).';
 }
 
 // Password change is optional; when asked for, the current password must be right.
@@ -84,8 +89,9 @@ $oldPicture = $user['profile_picture'];
 $newPicture = $hasPicture ? profile_picture_store($_FILES['profile_picture']) : ($removePic ? null : $oldPicture);
 
 try {
-    $fields = 'first_name = ?, middle_name = ?, last_name = ?, email = ?, profile_picture = ?';
-    $params = [$firstName, $middleName === '' ? null : $middleName, $lastName, $email, $newPicture];
+    $fields = 'first_name = ?, middle_name = ?, last_name = ?, email = ?, mobile_number = ?, area = ?, profile_picture = ?';
+    $params = [$firstName, $middleName === '' ? null : $middleName, $lastName, $email,
+               $mobile === '' ? null : $mobile, $area === '' ? null : $area, $newPicture];
     if ($changePassword) {
         $fields  .= ', password_hash = ?';
         $params[] = password_hash($new, PASSWORD_DEFAULT);

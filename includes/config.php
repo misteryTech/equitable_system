@@ -112,7 +112,7 @@ function current_user(): ?array
         $user = null;
         if (!empty($_SESSION['user_id'])) {
             $stmt = db()->prepare(
-                'SELECT user_id, role, status, field_engineer_id, location, profile_picture, reg_time_in, reg_time_out,
+                'SELECT user_id, role, status, field_engineer_id, location, mobile_number, area, profile_picture, reg_time_in, reg_time_out,
                         first_name, middle_name, last_name, username, email, created_at
                  FROM users WHERE user_id = ?'
             );
@@ -153,6 +153,12 @@ function pending_registration_count(): int
 {
     return (int) db()->query("SELECT COUNT(*) FROM users WHERE status = 'pending'")->fetchColumn();
 }
+
+/**
+ * Mobile number: digits, optionally starting with +, with spaces, dashes or brackets
+ * (e.g. 09171234567, +63 917 123 4567).
+ */
+const MOBILE_PATTERN = '/^\+?[0-9][0-9 ()-]{6,18}$/';
 
 function full_name(array $user): string
 {
