@@ -65,6 +65,9 @@ require __DIR__ . '/includes/sidebar.php';
 <?php if (isset($_GET['denied'])): ?>
     <div class="alert alert-warning">You don't have permission to open that page.</div>
 <?php endif; ?>
+<?php if (isset($_GET['password_changed'])): ?>
+    <div class="alert alert-success">Your new password is saved. Use it from now on.</div>
+<?php endif; ?>
 
     <section class="section dashboard">
       <div class="row">

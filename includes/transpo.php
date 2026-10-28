@@ -3,16 +3,11 @@
  * TRANSPORTATION EXPENSE module: shared helpers.
  * - Location normalization + duplicate detection (used by filing, route fares, import)
  * - Route fare master list lookups and changes (with history)
+ * - Transport modes (transpo_modes table): list, register a missing one
  * - Permissions and formatting
  * Include after includes/config.php.
  */
 
-const TRANSPO_MODES = [
-    'TRYKE' => 'Tryke',
-    'HABAL' => 'Habal-habal',
-    'PUJ'   => 'PUJ (jeep)',
-    'OTHER' => 'Other',
-];
 const TRANSPO_LOCATION_TYPES = [
     'base'     => 'Base',
     'merchant' => 'Merchant',
@@ -396,6 +391,119 @@ function transpo_merge_locations(int $keepId, array $dupIds): array
 }
 
 /* ======================================================================
+ * Transport modes (Tryke, Habal-habal, …) — the transpo_modes table
+ * ==================================================================== */
+
+const TRANSPO_MODE_LABEL_MAX = 50;
+const TRANSPO_MODE_CODE_MAX  = 20;
+// Modes Transpo Import writes (transpo_import_mode()): they can be renamed or turned off, not deleted.
+const TRANSPO_MODE_BUILT_IN  = ['TRYKE', 'HABAL', 'PUJ', 'OTHER'];
+
+/**
+ * Modes in list order: [code => label]. Active ones only, unless $activeOnly is false.
+ */
+function transpo_modes(bool $activeOnly = true): array
+{
+    return db()->query(
+        'SELECT code, label FROM transpo_modes' . ($activeOnly ? ' WHERE is_active = 1' : '') . ' ORDER BY sort_order, label'
+    )->fetchAll(PDO::FETCH_KEY_PAIR);
+}
+
+/**
+ * Every mode with how often legs and route fares use it (Transport Modes page).
+ */
+function transpo_mode_rows(): array
+{
+    return db()->query(
+        'SELECT m.*, CONCAT(u.first_name, \' \', u.last_name) AS created_by_name,
+                (SELECT COUNT(*) FROM transpo_trip_legs g WHERE g.mode = m.code) AS legs,
+                (SELECT COUNT(*) FROM transpo_route_rates r WHERE r.mode = m.code) AS rates
+         FROM transpo_modes m LEFT JOIN users u ON u.user_id = m.created_by
+         ORDER BY m.sort_order, m.label'
+    )->fetchAll();
+}
+
+/**
+ * A mode name typed by a user, tidied: "  grab   car " -> "grab car".
+ */
+function transpo_mode_clean_label(string $label): string
+{
+    return trim(preg_replace('/\s+/u', ' ', $label));
+}
+
+/**
+ * The code stored on legs and fares for a mode name: "Grab car" -> GRAB_CAR,
+ * "Habal-habal" -> HABAL_HABAL (capitals, digits and _ only, at most 20 characters).
+ */
+function transpo_mode_code(string $label): string
+{
+    $code = strtoupper(preg_replace('/[^A-Za-z0-9]+/', '_', $label));
+    return trim(substr(trim($code, '_'), 0, TRANSPO_MODE_CODE_MAX), '_');
+}
+
+/**
+ * What is wrong with a mode name, or null when it is fine.
+ */
+function transpo_mode_label_error(string $label): ?string
+{
+    if ($label === '') {
+        return 'Type the name of the mode, e.g. Motorela.';
+    }
+    if (mb_strlen($label) > TRANSPO_MODE_LABEL_MAX) {
+        return 'Mode name must be at most ' . TRANSPO_MODE_LABEL_MAX . ' characters.';
+    }
+    if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9 .\/()&+\-]*$/', $label)) {
+        return 'Mode name may use letters, numbers, spaces and - / ( ) . & +';
+    }
+    return null;
+}
+
+/**
+ * Register a mode that is missing from the list (from the leg form or Transport Modes).
+ * An existing mode with the same name or code is returned instead of a duplicate;
+ * an admin turns it back on if it was turned off.
+ * Returns ['ok' => true, 'mode' => ['code', 'label'], 'created' => bool] or ['ok' => false, 'error' => ...].
+ */
+function transpo_add_mode(string $label, array $user): array
+{
+    $label = transpo_mode_clean_label($label);
+    if ($error = transpo_mode_label_error($label)) {
+        return ['ok' => false, 'error' => $error];
+    }
+    $code = transpo_mode_code($label);
+
+    $find = db()->prepare('SELECT * FROM transpo_modes WHERE code = ? OR label = ? LIMIT 1');
+    $find->execute([$code, $label]);
+    if ($existing = $find->fetch()) {
+        if (!$existing['is_active']) {
+            if (!is_admin($user)) {
+                return ['ok' => false, 'error' => "\"{$existing['label']}\" was turned off by an admin. Ask an admin to turn it back on, or pick another mode."];
+            }
+            db()->prepare('UPDATE transpo_modes SET is_active = 1 WHERE code = ?')->execute([$existing['code']]);
+        }
+        return ['ok' => true, 'mode' => ['code' => $existing['code'], 'label' => $existing['label']], 'created' => false];
+    }
+
+    // New modes go just above "Other".
+    $next = (int) db()->query("SELECT COALESCE(MAX(sort_order), 0) FROM transpo_modes WHERE code <> 'OTHER'")->fetchColumn() + 10;
+    try {
+        db()->prepare('INSERT INTO transpo_modes (code, label, sort_order, created_by) VALUES (?, ?, ?, ?)')
+            ->execute([$code, $label, min(32000, $next), $user['user_id']]);
+    } catch (PDOException $ex) {
+        if ($ex->getCode() !== '23000') {
+            throw $ex;
+        }
+        $find->execute([$code, $label]);   // registered by someone else a moment ago
+        $row = $find->fetch();
+        return ['ok' => true, 'mode' => ['code' => $row['code'], 'label' => $row['label']], 'created' => false];
+    }
+    if (!is_admin($user)) {
+        notify_admins('transpo_mode', full_name($user) . " added a transport mode: $label.", 'transpo_modes.php');
+    }
+    return ['ok' => true, 'mode' => ['code' => $code, 'label' => $label], 'created' => true];
+}
+
+/* ======================================================================
  * Route fare master list
  * ==================================================================== */
 
@@ -451,7 +559,7 @@ function transpo_add_rate(int $fromId, int $toId, string $mode, float $fare, boo
     if (!transpo_location($fromId) || !transpo_location($toId)) {
         return ['ok' => false, 'error' => 'Please pick valid From and To locations.'];
     }
-    if (!array_key_exists($mode, TRANSPO_MODES)) {
+    if (!array_key_exists($mode, transpo_modes())) {
         return ['ok' => false, 'error' => 'Please pick a valid mode.'];
     }
     if ($conflict = transpo_rate_conflict($fromId, $toId, $mode, $twoWay)) {

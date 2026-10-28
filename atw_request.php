@@ -259,9 +259,9 @@ require __DIR__ . '/includes/sidebar.php';
   </template>
   <datalist id="atwMerchantList"><?php foreach ($suggestions['merchants'] as $v): ?><option value="<?= e($v) ?>"></option><?php endforeach; ?></datalist>
 
-  <link href="assets/vendor/tom-select/tom-select.bootstrap5.min.css" rel="stylesheet">
-  <script src="assets/vendor/tom-select/tom-select.complete.min.js"></script>
-  <script src="assets/js/email-generator.js"></script>
+  <link href="<?= asset('assets/vendor/tom-select/tom-select.bootstrap5.min.css') ?>" rel="stylesheet">
+  <script src="<?= asset('assets/vendor/tom-select/tom-select.complete.min.js') ?>"></script>
+  <script src="<?= asset('assets/js/email-generator.js') ?>"></script>
   <script>
     (function () {
       var EG = window.EmailGen;

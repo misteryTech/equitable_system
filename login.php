@@ -47,9 +47,9 @@ require __DIR__ . '/includes/head.php';
             <div class="col-lg-4 col-md-6 d-flex flex-column align-items-center justify-content-center">
 
               <div class="d-flex justify-content-center py-4">
-                <a href="index.php" class="logo d-flex align-items-center w-auto">
-                  <img src="assets/img/logo.png" alt="">
-                  <span class="d-none d-lg-block"><?= e(APP_NAME) ?></span>
+                <a href="index.php" class="d-flex flex-column align-items-center text-decoration-none">
+                  <img src="<?= asset('mistery.jpg') ?>" alt="<?= e(APP_NAME) ?> logo" class="rounded-circle border shadow-sm" style="width: 96px; height: 96px; object-fit: cover">
+                  <span class="mt-2 fw-bold" style="font-family: Nunito, sans-serif; font-size: 1.6rem; color: #012970"><?= e(APP_NAME) ?></span>
                 </a>
               </div><!-- End Logo -->
 
@@ -89,7 +89,10 @@ require __DIR__ . '/includes/head.php';
                     </div>
 
                     <div class="col-12">
-                      <label for="yourPassword" class="form-label">Password</label>
+                      <div class="d-flex justify-content-between align-items-baseline">
+                        <label for="yourPassword" class="form-label">Password</label>
+                        <a href="forgot_password.php" class="small">Forgot password?</a>
+                      </div>
                       <input type="password" name="password" class="form-control" id="yourPassword" required>
                     </div>
 
@@ -114,11 +117,9 @@ require __DIR__ . '/includes/head.php';
                 </div>
               </div>
 
-              <div class="credits">
-                <!-- All the links in the footer should remain intact. -->
-                <!-- You can delete the links only if you purchased the pro version. -->
-                <!-- Licensing information: https://bootstrapmade.com/license/ -->
-                Made by <strong><?= e(APP_AUTHOR) ?></strong> &middot; Template by <a href="https://bootstrapmade.com/">BootstrapMade</a>
+              <div class="credits text-center">
+                Made by <strong><?= e(APP_AUTHOR) ?></strong>
+                <div class="small text-muted">Version <?= e(app_version_label()) ?></div>
               </div>
 
             </div>

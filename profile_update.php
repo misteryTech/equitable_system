@@ -20,6 +20,9 @@ $user = current_user();
 if ($user === null) {
     respond(['errors' => ['Your session has expired. Please log in again.']], 401);
 }
+if (password_change_pending($user)) {
+    respond(['errors' => ['Please choose a new password first.']], 403);
+}
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     respond(['errors' => ['POST required.']], 405);
 }

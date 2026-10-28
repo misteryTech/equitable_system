@@ -1,0 +1,16 @@
+{
+  "name": "Equitable System",
+  "short_name": "Equitable",
+  "description": "Time Clock, DAS, transportation, email generator and serial inventory for field engineers.",
+  "id": "./",
+  "start_url": "./index.php",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f6f9ff",
+  "theme_color": "#012970",
+  "icons": [
+    { "src": "assets/img/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/img/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

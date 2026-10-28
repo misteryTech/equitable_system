@@ -66,8 +66,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $pdo->commit();
         redirect('terminal_labels.php');
     } elseif ($action === 'delete') {
-        if ($label['terminals'] > 0) {
-            $errors[] = "\"{$label['name']}\" can't be deleted: {$label['terminals']} terminal" . ($label['terminals'] === 1 ? ' uses' : 's use') . ' it. Deactivate it instead, or move those terminals to another label first.';
+        if ($label['terminals'] > 0 || $label['serials'] > 0) {
+            $errors[] = "\"{$label['name']}\" can't be deleted: {$label['terminals']} terminal(s) and {$label['serials']} serial(s) use it. Deactivate it instead, or move them to another label first.";
         } else {
             try {
                 db()->prepare('DELETE FROM terminal_labels WHERE id = ?')->execute([$id]);
@@ -78,7 +78,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($ex->getCode() !== '23000') {
                     throw $ex;
                 }
-                $errors[] = "\"{$label['name']}\" can't be deleted: terminals use it. Deactivate it instead.";
+                $errors[] = "\"{$label['name']}\" can't be deleted: terminals or serials use it. Deactivate it instead.";
             }
         }
     } else {
@@ -150,7 +150,7 @@ require __DIR__ . '/includes/sidebar.php';
                     <tr>
                       <th style="width: 4.5rem">Order</th>
                       <th>Name</th>
-                      <th class="text-end">Terminals</th>
+                      <th class="text-end">Used by</th>
                       <th>Status</th>
                       <th class="text-end">Action</th>
                     </tr>
@@ -181,7 +181,10 @@ require __DIR__ . '/includes/sidebar.php';
                           <input type="text" name="name" class="form-control form-control-sm" maxlength="<?= TERMINAL_LABEL_MAX ?>" value="<?= e($l['name']) ?>" required aria-label="Name of <?= e($l['name']) ?>">
                         </form>
                       </td>
-                      <td class="text-end"><a href="terminals.php?label=<?= (int) $l['id'] ?>"><?= (int) $l['terminals'] ?></a></td>
+                      <td class="text-end small text-nowrap">
+                        <a href="terminals.php?label=<?= (int) $l['id'] ?>"><?= (int) $l['terminals'] ?> terminal<?= $l['terminals'] === 1 ? '' : 's' ?></a><br>
+                        <a href="serial_records.php?label=<?= (int) $l['id'] ?>"><?= (int) $l['serials'] ?> serial<?= $l['serials'] === 1 ? '' : 's' ?></a>
+                      </td>
                       <td><span class="badge <?= $l['is_active'] ? 'bg-success' : 'bg-secondary' ?>"><?= $l['is_active'] ? 'Active' : 'Inactive' ?></span></td>
                       <td class="text-end text-nowrap">
                         <button type="submit" form="<?= e($formId) ?>" class="btn btn-sm btn-outline-primary" title="Save name"><i class="bi bi-check-lg"></i><span class="d-none d-sm-inline"> Save</span></button>
@@ -195,7 +198,7 @@ require __DIR__ . '/includes/sidebar.php';
                           <?= csrf_field() ?>
                           <input type="hidden" name="action" value="delete">
                           <input type="hidden" name="id" value="<?= (int) $l['id'] ?>">
-                          <button type="submit" class="btn btn-sm btn-outline-danger" <?= $l['terminals'] > 0 ? 'disabled title="Terminals use this label — deactivate it instead"' : 'title="Delete"' ?> aria-label="Delete <?= e($l['name']) ?>">
+                          <button type="submit" class="btn btn-sm btn-outline-danger" <?= $l['terminals'] > 0 || $l['serials'] > 0 ? 'disabled title="In use — deactivate it instead"' : 'title="Delete"' ?> aria-label="Delete <?= e($l['name']) ?>">
                             <i class="bi bi-trash"></i>
                           </button>
                         </form>

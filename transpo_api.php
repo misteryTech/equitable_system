@@ -10,6 +10,7 @@
  * POST action=delete_visit
  * POST action=set_base                     engineer's daily starting point
  * POST action=report_rate                  "Report wrong fare"
+ * POST action=add_mode                     register a missing transport mode from the leg form
  * POST requests need the csrf_token field.
  */
 require_once __DIR__ . '/includes/config.php';
@@ -28,6 +29,9 @@ function respond(array $data, int $status = 200): void
 $user = current_user();
 if ($user === null) {
     respond(['error' => 'Your session has expired. Please log in again.'], 401);
+}
+if (password_change_pending($user)) {
+    respond(['error' => 'Please choose a new password first.'], 403);
 }
 $isAdmin = is_admin($user);
 $action  = $_GET['action'] ?? $_POST['action'] ?? '';
@@ -57,7 +61,7 @@ if ($action === 'get_rate') {
     $from = (int) ($_GET['from'] ?? 0);
     $to   = (int) ($_GET['to'] ?? 0);
     $mode = (string) ($_GET['mode'] ?? '');
-    if (!$from || !$to || $from === $to || !array_key_exists($mode, TRANSPO_MODES)) {
+    if (!$from || !$to || $from === $to || !array_key_exists($mode, transpo_modes(false))) {
         respond(['rate' => null]);
     }
     $rate = transpo_find_rate($from, $to, $mode);
@@ -137,6 +141,13 @@ switch ($action) {
         }
         respond(['status' => $result['status'], 'location' => transpo_location_json($result['location'])]);
 
+    case 'add_mode':
+        $result = transpo_add_mode((string) ($_POST['label'] ?? ''), $user);
+        if (!$result['ok']) {
+            respond(['error' => $result['error']], 422);
+        }
+        respond(['ok' => true, 'mode' => $result['mode'], 'created' => $result['created']]);
+
     case 'quick_add_rate':
         $fare = transpo_parse_fare($_POST['fare'] ?? '');
         if ($fare === null) {
@@ -199,6 +210,7 @@ switch ($action) {
             $errors[] = 'A ticket can have at most ' . TRANSPO_MAX_LEGS . ' legs.';
         }
         $clean = [];
+        $modes = transpo_modes(false);   // a turned-off mode stays valid on legs that already use it
         foreach ($legs as $i => $leg) {
             $n    = $i + 1;
             $from = (int) ($leg['from_id'] ?? 0);
@@ -212,14 +224,14 @@ switch ($action) {
             if ($from === $to) {
                 $errors[] = "Leg $n: From and To must be different.";
             }
-            if (!array_key_exists($mode, TRANSPO_MODES)) {
+            if (!array_key_exists($mode, $modes)) {
                 $errors[] = "Leg $n: choose the mode.";
             }
             if ($fare === null) {
                 $errors[] = "Leg $n: fare must be a positive amount.";
             }
             // The master list decides route_rate_id / override, not the browser.
-            $rate    = array_key_exists($mode, TRANSPO_MODES) ? transpo_find_rate($from, $to, $mode) : null;
+            $rate    = array_key_exists($mode, $modes) ? transpo_find_rate($from, $to, $mode) : null;
             $clean[] = [
                 'from' => $from, 'to' => $to, 'mode' => $mode, 'fare' => $fare,
                 'rate_id'    => $rate ? (int) $rate['id'] : null,

@@ -57,6 +57,14 @@ function time_log_filing_badge(string $type): string
 }
 
 /**
+ * Where a duty day was spent (time_logs.trip_type), chosen on My DAS.
+ */
+const TRIP_TYPES = [
+    'within_city' => 'Within the city',
+    'out_of_town' => 'Out of town',
+];
+
+/**
  * The single time_settings row (break, early-in / OT rounding and minimum).
  */
 function time_settings(bool $refresh = false): array

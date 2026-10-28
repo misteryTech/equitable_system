@@ -2,10 +2,11 @@
 /**
  * Serial Inventory: a register of serial numbers read from QR codes / barcodes on
  * terminal and device labels. Each serial is stored once, with the date it was first
- * registered; nothing else is kept.
+ * registered and its label; nothing else is kept.
  *   clean_serial()    scanned or typed text -> serial (no database)
  *   register_serial() save a new serial, or report that it already exists
  *   check_serial()    look a serial up without saving
+ *   Each serial can carry a label from terminal_labels (CBG-MP, CBG-AB, TBG, …).
  * The database functions take the PDO connection, so tests can use SQLite
  * (tests/serial_inventory_test.php).
  */
@@ -91,31 +92,34 @@ function serial_date_valid(string $ymd, string $today): bool
 
 /**
  * Look a serial up without saving.
- * Returns ['status' => 'exists', 'serial', 'date', 'id'] or ['status' => 'not_found', 'serial', 'date' => null, 'id' => null].
+ * Returns ['status' => 'exists', 'serial', 'date', 'id', 'label_id'] or
+ *         ['status' => 'not_found', 'serial', 'date' => null, 'id' => null, 'label_id' => null].
  */
 function check_serial(PDO $pdo, string $serial): array
 {
-    $stmt = $pdo->prepare('SELECT id, registered_date FROM serial_inventory WHERE serial = ?');
+    $stmt = $pdo->prepare('SELECT id, registered_date, label_id FROM serial_inventory WHERE serial = ?');
     $stmt->execute([$serial]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     return $row
-        ? ['status' => 'exists', 'serial' => $serial, 'date' => $row['registered_date'], 'id' => (int) $row['id']]
-        : ['status' => 'not_found', 'serial' => $serial, 'date' => null, 'id' => null];
+        ? ['status' => 'exists', 'serial' => $serial, 'date' => $row['registered_date'], 'id' => (int) $row['id'],
+           'label_id' => $row['label_id'] === null ? null : (int) $row['label_id']]
+        : ['status' => 'not_found', 'serial' => $serial, 'date' => null, 'id' => null, 'label_id' => null];
 }
 
 /**
- * Register a serial with $date (Y-m-d). An existing serial is not saved again.
- * Returns ['status' => 'registered' | 'exists', 'serial', 'date', 'id'];
- * for 'exists', date is the date it was first registered.
+ * Register a serial with $date (Y-m-d) and an optional label (terminal_labels.id).
+ * An existing serial is not saved again and keeps its own label.
+ * Returns ['status' => 'registered' | 'exists', 'serial', 'date', 'id', 'label_id'];
+ * for 'exists', date and label are the ones it was first registered with.
  */
-function register_serial(PDO $pdo, string $serial, string $date): array
+function register_serial(PDO $pdo, string $serial, string $date, ?int $labelId = null): array
 {
     $found = check_serial($pdo, $serial);
     if ($found['status'] === 'exists') {
         return $found;
     }
     try {
-        $pdo->prepare('INSERT INTO serial_inventory (serial, registered_date) VALUES (?, ?)')->execute([$serial, $date]);
+        $pdo->prepare('INSERT INTO serial_inventory (serial, label_id, registered_date) VALUES (?, ?, ?)')->execute([$serial, $labelId, $date]);
     } catch (PDOException $ex) {
         // Someone registered it a moment ago (UNIQUE on serial).
         if ($ex->getCode() !== '23000') {
@@ -123,21 +127,22 @@ function register_serial(PDO $pdo, string $serial, string $date): array
         }
         return check_serial($pdo, $serial);
     }
-    return ['status' => 'registered', 'serial' => $serial, 'date' => $date, 'id' => (int) $pdo->lastInsertId()];
+    return ['status' => 'registered', 'serial' => $serial, 'date' => $date, 'id' => (int) $pdo->lastInsertId(), 'label_id' => $labelId];
 }
 
 /**
- * Registered dates for many serials at once: [serial => date]. Missing serials are left out.
+ * Many serials at once: [serial => ['date' => registered date, 'label_id' => id or null]].
+ * Serials that are not registered are left out.
  */
-function serial_dates(PDO $pdo, array $serials): array
+function serial_lookup(PDO $pdo, array $serials): array
 {
-    $dates = [];
+    $found = [];
     foreach (array_chunk(array_values(array_unique($serials)), 500) as $chunk) {
-        $stmt = $pdo->prepare('SELECT serial, registered_date FROM serial_inventory WHERE serial IN (' . implode(',', array_fill(0, count($chunk), '?')) . ')');
+        $stmt = $pdo->prepare('SELECT serial, registered_date, label_id FROM serial_inventory WHERE serial IN (' . implode(',', array_fill(0, count($chunk), '?')) . ')');
         $stmt->execute($chunk);
         foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
-            $dates[strtoupper($row['serial'])] = $row['registered_date'];
+            $found[strtoupper($row['serial'])] = ['date' => $row['registered_date'], 'label_id' => $row['label_id'] === null ? null : (int) $row['label_id']];
         }
     }
-    return $dates;
+    return $found;
 }

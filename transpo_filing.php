@@ -291,10 +291,16 @@ require __DIR__ . '/includes/sidebar.php';
           <label class="form-label small mb-0">Mode</label>
           <select class="form-select leg-mode">
             <option value="">Mode…</option>
-<?php foreach (TRANSPO_MODES as $key => $label): ?>
+<?php foreach (transpo_modes() as $key => $label): ?>
             <option value="<?= e($key) ?>"><?= e($label) ?></option>
 <?php endforeach; ?>
+            <option value="__new">+ Add new mode…</option>
           </select>
+          <div class="input-group input-group-sm mt-1 d-none leg-mode-new">
+            <input type="text" class="form-control leg-mode-name" maxlength="50" placeholder="e.g. Motorela" aria-label="New mode name">
+            <button type="button" class="btn btn-primary leg-mode-add">Add</button>
+            <button type="button" class="btn btn-outline-secondary leg-mode-cancel" aria-label="Cancel"><i class="bi bi-x-lg"></i></button>
+          </div>
         </div>
         <div class="col-6 col-md-4">
           <label class="form-label small mb-0">Fare (₱)</label>
@@ -327,7 +333,7 @@ require __DIR__ . '/includes/sidebar.php';
       returnUrl: <?= json_encode('transpo_filing.php?date=' . $date . ($isAdmin ? '&engineer=' . $engineerId : '')) ?>
     };
   </script>
-  <script src="assets/js/transpo-filing.js"></script>
+  <script src="<?= asset('assets/js/transpo-filing.js') ?>"></script>
 
 <?php
 require __DIR__ . '/includes/footer.php';

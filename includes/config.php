@@ -13,6 +13,7 @@ date_default_timezone_set('Asia/Manila');
 
 define('APP_NAME', 'Equitable System');
 define('APP_AUTHOR', 'Mistery');
+require_once __DIR__ . '/version.php';   // APP_VERSION, shown in the footer
 
 // Matches the DEFAULT on users.location.
 define('DEFAULT_LOCATION', 'M2C Depot');
@@ -43,6 +44,20 @@ function db(): PDO
         );
     }
     return $pdo;
+}
+
+/**
+ * URL of a local CSS / JS / image file with ?v=<last modified time>, ready for an
+ * HTML attribute: asset('assets/css/style.css') -> "assets/css/style.css?v=1761620000".
+ * Browsers and the service worker cache these files for a long time, so a changed
+ * file gets a new URL and is downloaded again. The path is relative to the web root
+ * of the system (the folder with index.php), so it works on XAMPP and Hostinger.
+ */
+function asset(string $path): string
+{
+    $file    = dirname(__DIR__) . '/' . ltrim($path, '/');
+    $version = is_file($file) ? filemtime($file) : false;
+    return htmlspecialchars($path . ($version ? '?v=' . $version : ''), ENT_QUOTES, 'UTF-8');
 }
 
 /**
@@ -112,7 +127,7 @@ function current_user(): ?array
         $user = null;
         if (!empty($_SESSION['user_id'])) {
             $stmt = db()->prepare(
-                'SELECT user_id, role, status, field_engineer_id, location, mobile_number, area, profile_picture, reg_time_in, reg_time_out,
+                'SELECT user_id, role, status, must_change_password, field_engineer_id, location, mobile_number, area, profile_picture, reg_time_in, reg_time_out,
                         first_name, middle_name, last_name, username, email, created_at
                  FROM users WHERE user_id = ?'
             );
@@ -174,7 +189,20 @@ function require_login(): array
     if ($user === null) {
         redirect('login.php');
     }
+    // After an admin reset the password, the user must choose their own before going on.
+    if (!empty($user['must_change_password']) && basename($_SERVER['SCRIPT_NAME'] ?? '') !== 'change_password.php') {
+        redirect('change_password.php');
+    }
     return $user;
+}
+
+/**
+ * True while a signed-in user must choose their own password after an admin reset.
+ * Pages use require_login(); JSON endpoints that call current_user() directly check this.
+ */
+function password_change_pending(?array $user): bool
+{
+    return $user !== null && !empty($user['must_change_password']);
 }
 
 /**

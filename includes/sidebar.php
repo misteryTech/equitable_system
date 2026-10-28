@@ -9,6 +9,13 @@
 $sidebarUser = current_user();
 $pendingCount = is_admin($sidebarUser) ? pending_registration_count() : 0;
 
+// Admin badge on Password Resets: requests from "Forgot password?" waiting for approval.
+$resetCount = 0;
+if (is_admin($sidebarUser)) {
+    require_once __DIR__ . '/password_reset.php';
+    $resetCount = password_reset_pending_count();
+}
+
 // Admin badge on Route Fares: engineer fares waiting for approval + open "wrong fare" reports.
 $transpoCount = 0;
 if (is_admin($sidebarUser)) {
@@ -26,6 +33,7 @@ $menu = [
     ['heading' => 'Administration', 'roles' => ['admin']],
 
     ['key' => 'registrations',      'label' => 'Registrations',      'icon' => 'bi-person-check',   'href' => 'registrations.php',      'roles' => ['admin'], 'badge' => $pendingCount],
+    ['key' => 'password-resets',    'label' => 'Password Resets',    'icon' => 'bi-key',            'href' => 'password_resets.php',    'roles' => ['admin'], 'badge' => $resetCount],
     ['key' => 'registration',       'label' => 'Register User',      'icon' => 'bi-person-plus',    'href' => 'registration.php',       'roles' => ['admin']],
     ['key' => 'locations',          'label' => 'Locations',          'icon' => 'bi-geo-alt',        'href' => 'locations.php',          'roles' => ['admin']],
     ['key' => 'engineer-schedules', 'label' => 'User Schedules',     'icon' => 'bi-calendar-week', 'href' => 'engineer_schedules.php', 'roles' => ['admin']],
@@ -38,6 +46,7 @@ $menu = [
     ['key' => 'transpo-filing',    'label' => 'Transpo Filing',    'icon' => 'bi-bus-front',        'href' => 'transpo_filing.php',    'roles' => ['field_engineer', 'admin']],
     ['key' => 'route-fares',       'label' => 'Route Fares',       'icon' => 'bi-signpost-split',   'href' => 'route_fares.php',       'roles' => ['field_engineer', 'admin'], 'badge' => $transpoCount],
     ['key' => 'transpo-locations', 'label' => 'Transpo Locations', 'icon' => 'bi-pin-map',          'href' => 'transpo_locations.php', 'roles' => ['admin']],
+    ['key' => 'transpo-modes',     'label' => 'Transport Modes',   'icon' => 'bi-truck',            'href' => 'transpo_modes.php',     'roles' => ['admin']],
     ['key' => 'transpo-reports',   'label' => 'Transpo Reports',   'icon' => 'bi-receipt',          'href' => 'transpo_reports.php',   'roles' => ['admin']],
     ['key' => 'transpo-import',    'label' => 'Transpo Import',    'icon' => 'bi-file-earmark-arrow-up', 'href' => 'transpo_import.php', 'roles' => ['admin']],
 

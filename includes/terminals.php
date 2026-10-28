@@ -157,21 +157,25 @@ function terminal_label_clean(string $name): string
 }
 
 /**
- * Labels in list order, keyed by id: [id => ['id', 'name', 'is_active', 'sort_order', 'terminals']].
+ * Labels in list order, keyed by id: [id => ['id', 'name', 'is_active', 'sort_order', 'terminals', 'serials']]
+ * (terminals / serials = how many terminals and Serial Inventory serials use the label).
  */
 function terminal_labels(bool $activeOnly = false): array
 {
     $rows = db()->query(
-        'SELECT l.id, l.name, l.is_active, l.sort_order, COUNT(t.terminal_id) AS terminals
-         FROM terminal_labels l LEFT JOIN terminals t ON t.label_id = l.id'
+        'SELECT l.id, l.name, l.is_active, l.sort_order,
+                (SELECT COUNT(*) FROM terminals t WHERE t.label_id = l.id) AS terminals,
+                (SELECT COUNT(*) FROM serial_inventory s WHERE s.label_id = l.id) AS serials
+         FROM terminal_labels l'
         . ($activeOnly ? ' WHERE l.is_active = 1' : '') .
-        ' GROUP BY l.id ORDER BY l.sort_order, l.name'
+        ' ORDER BY l.sort_order, l.name'
     )->fetchAll();
     $labels = [];
     foreach ($rows as $row) {
         $row['id']        = (int) $row['id'];
         $row['is_active'] = (int) $row['is_active'];
         $row['terminals'] = (int) $row['terminals'];
+        $row['serials']   = (int) $row['serials'];
         $labels[$row['id']] = $row;
     }
     return $labels;

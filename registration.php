@@ -5,6 +5,9 @@ require_once __DIR__ . '/includes/profile_picture.php';
 // Guests may self-register as field engineers; logged-in admins may create
 // accounts with any role. Logged-in field engineers are sent to the dashboard.
 $viewer    = current_user();
+if (password_change_pending($viewer)) {
+    redirect('change_password.php');
+}
 $adminMode = is_admin($viewer);
 if ($viewer !== null && !$adminMode) {
     redirect('index.php');
@@ -221,9 +224,9 @@ else:
             <div class="col-xl-6 col-lg-8 col-md-10 d-flex flex-column align-items-center justify-content-center">
 
               <div class="d-flex justify-content-center py-4">
-                <a href="index.php" class="logo d-flex align-items-center w-auto">
-                  <img src="assets/img/logo.png" alt="">
-                  <span class="d-none d-lg-block"><?= e(APP_NAME) ?></span>
+                <a href="index.php" class="d-flex flex-column align-items-center text-decoration-none">
+                  <img src="<?= asset('mistery.jpg') ?>" alt="<?= e(APP_NAME) ?> logo" class="rounded-circle border shadow-sm" style="width: 96px; height: 96px; object-fit: cover">
+                  <span class="mt-2 fw-bold" style="font-family: Nunito, sans-serif; font-size: 1.6rem; color: #012970"><?= e(APP_NAME) ?></span>
                 </a>
               </div><!-- End Logo -->
 
@@ -240,11 +243,9 @@ else:
                 </div>
               </div>
 
-              <div class="credits">
-                <!-- All the links in the footer should remain intact. -->
-                <!-- You can delete the links only if you purchased the pro version. -->
-                <!-- Licensing information: https://bootstrapmade.com/license/ -->
-                Made by <strong><?= e(APP_AUTHOR) ?></strong> &middot; Template by <a href="https://bootstrapmade.com/">BootstrapMade</a>
+              <div class="credits text-center">
+                Made by <strong><?= e(APP_AUTHOR) ?></strong>
+                <div class="small text-muted">Version <?= e(app_version_label()) ?></div>
               </div>
 
             </div>

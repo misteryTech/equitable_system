@@ -13,6 +13,11 @@ if ($user === null) {
     echo json_encode(['error' => 'Not logged in.']);
     exit;
 }
+if (password_change_pending($user)) {
+    http_response_code(403);
+    echo json_encode(['error' => 'Please choose a new password first.']);
+    exit;
+}
 
 $unread = notifications_unread_count((int) $user['user_id']);
 echo json_encode([

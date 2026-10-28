@@ -108,6 +108,8 @@ function notification_title(string $type): string
         'registration'   => 'New registration',
         'transpo_rate'   => 'Route fare to approve',
         'transpo_report' => 'Wrong fare reported',
+        'transpo_mode'   => 'New transport mode',
+        'password_reset' => 'Password reset request',
     ][$type] ?? 'Notification';
 }
 
@@ -120,5 +122,7 @@ function notification_icon(string $type): string
         'registration'   => 'bi-person-plus text-warning',
         'transpo_rate'   => 'bi-signpost-split text-primary',
         'transpo_report' => 'bi-flag text-danger',
+        'transpo_mode'   => 'bi-bus-front text-success',
+        'password_reset' => 'bi-key text-warning',
     ][$type] ?? 'bi-info-circle text-primary';
 }

@@ -4,7 +4,8 @@
  * a later ticket starts at the previous ticket's merchant; each new leg starts
  * where the previous one ended; a new leg's To defaults to the ticket's merchant.
  * Fares auto-fill from the route fare list (get_rate); a changed fare is an
- * override for this leg only.
+ * override for this leg only. A mode missing from the list can be registered from
+ * the leg ("+ Add new mode…"); it is added to every leg's list.
  * Needs window.FILING (from transpo_filing.php) and window.Transpo (transpo.js).
  */
 (function () {
@@ -151,19 +152,76 @@
     }).catch(function () { setRateArea(el, '<span class="text-danger">Could not look up the fare.</span>'); });
   }
 
+  /* ---------- transport modes ---------- */
+
+  function modeSelects() {
+    return [template.content.querySelector(".leg-mode")].concat(Array.prototype.slice.call(legsBox.querySelectorAll(".leg-mode")));
+  }
+
+  // A mode that is not in this list yet (just registered, or turned off but used on a saved leg).
+  function addModeOption(select, code, label) {
+    if (select.querySelector('option[value="' + code.replace(/"/g, "") + '"]')) { return; }
+    var o = document.createElement("option");
+    o.value = code;
+    o.textContent = label;
+    select.insertBefore(o, select.querySelector('option[value="__new"]'));
+  }
+
+  function setupModeAdd(el) {
+    var select = el.querySelector(".leg-mode");
+    var box = el.querySelector(".leg-mode-new");
+    var input = el.querySelector(".leg-mode-name");
+    select._last = select.value;
+
+    function close() { box.classList.add("d-none"); select.value = select._last || ""; }
+    function add() {
+      var label = input.value.trim();
+      if (!label) { input.focus(); return; }
+      var btn = el.querySelector(".leg-mode-add");
+      btn.disabled = true;
+      T.post("add_mode", { label: label }).then(function (res) {
+        modeSelects().forEach(function (s) { addModeOption(s, res.mode.code, res.mode.label); });
+        select.value = select._last = res.mode.code;
+        box.classList.add("d-none");
+        flash(res.created ? 'Mode "' + res.mode.label + '" added. It is now in every leg\'s list.' : '"' + res.mode.label + '" was already in the list; it is selected now.', "success");
+        lookupRate(el);
+      }).catch(function (err) { alert(err.message); })
+        .finally(function () { btn.disabled = false; });
+    }
+
+    select.addEventListener("change", function () {
+      if (select.value === "__new") {
+        box.classList.remove("d-none");
+        input.value = "";
+        input.focus();
+        return;
+      }
+      select._last = select.value;
+      box.classList.add("d-none");
+      lookupRate(el);
+    });
+    el.querySelector(".leg-mode-add").addEventListener("click", add);
+    el.querySelector(".leg-mode-cancel").addEventListener("click", close);
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); add(); }
+      if (e.key === "Escape") { e.preventDefault(); close(); }
+    });
+  }
+
   function addLeg(data, after) {
     var el = template.content.firstElementChild.cloneNode(true);
     if (after && after.nextSibling) { legsBox.insertBefore(el, after.nextSibling); } else { legsBox.appendChild(el); }
 
     el._from = T.locationSelect(el.querySelector(".leg-from"), { placeholder: "From…", onChange: function () { lookupRate(el); } });
     el._to = T.locationSelect(el.querySelector(".leg-to"), { placeholder: "To…", onChange: function () { lookupRate(el); } });
-    el.querySelector(".leg-mode").addEventListener("change", function () { lookupRate(el); });
+    setupModeAdd(el);
     el.querySelector(".leg-fare").addEventListener("input", function () { updateBadge(el); recalc(); });
 
     el.querySelector(".leg-remove").addEventListener("click", function () {
       if (legs().length === 1) {
         el._from.clear(); el._to.clear();
-        el.querySelector(".leg-mode").value = ""; el.querySelector(".leg-fare").value = "";
+        el.querySelector(".leg-mode").value = el.querySelector(".leg-mode")._last = ""; el.querySelector(".leg-fare").value = "";
+        el.querySelector(".leg-mode-new").classList.add("d-none");
         lookupRate(el);
       } else {
         el._from.destroy(); el._to.destroy(); el.remove();
@@ -207,7 +265,8 @@
     if (data) {
       T.setLocation(el._from, data.from, true);
       T.setLocation(el._to, data.to, true);
-      el.querySelector(".leg-mode").value = data.mode || "";
+      if (data.mode) { addModeOption(el.querySelector(".leg-mode"), data.mode, (data.mode_label || data.mode) + " (turned off)"); }
+      el.querySelector(".leg-mode").value = el.querySelector(".leg-mode")._last = data.mode || "";
       if (data.fare) { el.querySelector(".leg-fare").value = Number(data.fare).toFixed(2); }
       lookupRate(el, true);
     } else {
@@ -309,7 +368,8 @@
     if (!merchantTs.getValue()) { errors.push("Please choose the merchant."); }
     if (!$("visitedAt").value) { errors.push("Please enter the date and time."); }
     var legData = legs().map(function (el, i) {
-      var leg = { from_id: el._from.getValue(), to_id: el._to.getValue(), mode: el.querySelector(".leg-mode").value, fare: el.querySelector(".leg-fare").value };
+      var mode = el.querySelector(".leg-mode").value;
+      var leg = { from_id: el._from.getValue(), to_id: el._to.getValue(), mode: mode === "__new" ? "" : mode, fare: el.querySelector(".leg-fare").value };
       if (!leg.from_id || !leg.to_id) { errors.push("Leg " + (i + 1) + ": choose From and To."); }
       else if (leg.from_id === leg.to_id) { errors.push("Leg " + (i + 1) + ": From and To must be different."); }
       if (!leg.mode) { errors.push("Leg " + (i + 1) + ": choose the mode."); }

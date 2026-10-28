@@ -172,7 +172,9 @@ unset($_SESSION['flash']);
 /* ---------- list ---------- */
 
 $q       = trim((string) ($_GET['q'] ?? ''));
-$mode    = array_key_exists($_GET['mode'] ?? '', TRANSPO_MODES) ? $_GET['mode'] : '';
+$allModes    = transpo_modes(false);   // filter: every mode; forms: active ones
+$activeModes = transpo_modes();
+$mode    = array_key_exists($_GET['mode'] ?? '', $allModes) ? $_GET['mode'] : '';
 $status  = in_array($_GET['status'] ?? '', ['approved', 'pending', 'inactive'], true) ? $_GET['status'] : '';
 $addedBy = (int) ($_GET['added_by'] ?? 0);
 $highlight = (int) ($_GET['highlight'] ?? 0);
@@ -276,7 +278,7 @@ require __DIR__ . '/includes/sidebar.php';
               <tbody>
 <?php foreach ($reports as $x): ?>
                 <tr class="<?= $x['status'] === 'resolved' ? 'text-muted' : '' ?>">
-                  <td><?= e($x['from_name']) ?> <?= $x['is_two_way'] ? '↔' : '→' ?> <?= e($x['to_name']) ?> <span class="badge bg-light text-dark border"><?= e($x['mode']) ?></span></td>
+                  <td><?= e($x['from_name']) ?> <?= $x['is_two_way'] ? '↔' : '→' ?> <?= e($x['to_name']) ?> <span class="badge bg-light text-dark border"><?= e($allModes[$x['mode']] ?? $x['mode']) ?></span></td>
                   <td class="text-end text-nowrap"><?= e(transpo_money($x['current_fare'])) ?></td>
                   <td class="text-end text-nowrap"><?= $x['suggested_fare'] !== null ? e(transpo_money($x['suggested_fare'])) : '—' ?></td>
                   <td><?= e($x['note']) ?></td>
@@ -325,7 +327,7 @@ require __DIR__ . '/includes/sidebar.php';
                 <div class="col-6 col-md-2">
                   <label class="form-label">Mode</label>
                   <select name="mode" class="form-select" required>
-<?php foreach (TRANSPO_MODES as $key => $label): ?>
+<?php foreach ($activeModes as $key => $label): ?>
                     <option value="<?= e($key) ?>"><?= e($label) ?></option>
 <?php endforeach; ?>
                   </select>
@@ -368,7 +370,7 @@ require __DIR__ . '/includes/sidebar.php';
             <div class="col-md-4"><label class="form-label" for="q">Location</label><input type="search" id="q" name="q" class="form-control" placeholder="Search a place" value="<?= e($q) ?>"></div>
             <div class="col-6 col-md-2"><label class="form-label" for="fMode">Mode</label>
               <select id="fMode" name="mode" class="form-select"><option value="">All</option>
-<?php foreach (TRANSPO_MODES as $key => $label): ?>
+<?php foreach ($allModes as $key => $label): ?>
                 <option value="<?= e($key) ?>" <?= $mode === $key ? 'selected' : '' ?>><?= e($label) ?></option>
 <?php endforeach; ?>
               </select></div>
@@ -399,7 +401,7 @@ require __DIR__ . '/includes/sidebar.php';
                 <tr id="rate-<?= (int) $r['id'] ?>" class="<?= $highlight === (int) $r['id'] ? 'table-warning' : '' ?><?= $r['is_active'] ? '' : ' text-muted' ?>">
                   <td class="transpo-route"><?= e($r['from_name']) ?><span class="arrow"><?= $r['is_two_way'] ? '↔' : '→' ?></span><?= e($r['to_name']) ?>
                     <?= $r['open_reports'] ? '<span class="badge bg-danger" title="Reported as wrong">reported</span>' : '' ?></td>
-                  <td><?= e($r['mode']) ?></td>
+                  <td><?= e($allModes[$r['mode']] ?? $r['mode']) ?></td>
                   <td class="text-end text-nowrap fw-semibold"><?= e(transpo_money($r['fare'])) ?></td>
                   <td><?= transpo_status_badge($r['status'], (bool) $r['is_active']) ?></td>
                   <td class="text-end"><?= (int) $r['times_used'] ?></td>
@@ -490,7 +492,7 @@ require __DIR__ . '/includes/sidebar.php';
     <tr>
       <td><select class="bulk-to"></select></td>
       <td><select class="form-select form-select-sm bulk-mode">
-<?php foreach (TRANSPO_MODES as $key => $label): ?>
+<?php foreach ($activeModes as $key => $label): ?>
         <option value="<?= e($key) ?>"><?= e($label) ?></option>
 <?php endforeach; ?>
       </select></td>

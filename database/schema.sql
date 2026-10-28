@@ -22,9 +22,27 @@ CREATE TABLE IF NOT EXISTS users (
     username      VARCHAR(30)  NOT NULL UNIQUE,
     email         VARCHAR(100) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,   -- store the HASH, never plain text
+    must_change_password TINYINT(1) NOT NULL DEFAULT 0,  -- 1 after an admin reset: choose a new one at login
     created_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
                                ON UPDATE CURRENT_TIMESTAMP
+);
+
+-- "Forgot password?" requests; an admin approves one by setting a new password.
+CREATE TABLE IF NOT EXISTS password_reset_requests (
+  id           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id      INT UNSIGNED NOT NULL,
+  note         VARCHAR(255) NULL,                        -- message from the user
+  status       ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
+  requested_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  requested_ip VARCHAR(45)  NULL,
+  handled_by   INT UNSIGNED NULL,                        -- admin who approved / rejected
+  handled_at   DATETIME     NULL,
+  admin_note   VARCHAR(255) NULL,                        -- reason for rejecting
+  KEY idx_password_reset_status (status, requested_at),
+  KEY idx_password_reset_user (user_id),
+  CONSTRAINT fk_password_reset_user  FOREIGN KEY (user_id)    REFERENCES users(user_id) ON DELETE CASCADE,
+  CONSTRAINT fk_password_reset_admin FOREIGN KEY (handled_by) REFERENCES users(user_id) ON DELETE SET NULL
 );
 
 -- Options for the Location dropdown on registration.
@@ -44,6 +62,7 @@ CREATE TABLE IF NOT EXISTS time_logs (
   user_id    INT UNSIGNED NOT NULL,
   work_date  DATE         NOT NULL,
   filing_type ENUM('regular', 'holiday') NOT NULL DEFAULT 'regular',  -- chosen at TIME IN; label only
+  trip_type   ENUM('within_city', 'out_of_town') NOT NULL DEFAULT 'within_city',  -- set on My DAS
   sched_in   TIME         NULL,          -- copied from users.reg_time_in at TIME IN
   sched_out  TIME         NULL,
   time_in    DATETIME     NULL,
@@ -161,12 +180,28 @@ CREATE TABLE IF NOT EXISTS transpo_location_aliases (
   CONSTRAINT fk_transpo_alias_location FOREIGN KEY (location_id) REFERENCES transpo_locations(id) ON DELETE CASCADE
 );
 
+-- 2b. Transport modes (Tryke, Habal-habal, …). Users can register a missing one from the
+--     leg form; admins adjust them on Transport Modes. Legs and fares store the code.
+CREATE TABLE IF NOT EXISTS transpo_modes (
+  code       VARCHAR(20)  NOT NULL PRIMARY KEY,   -- stored on legs and fares, e.g. TRYKE
+  label      VARCHAR(50)  NOT NULL,               -- shown in dropdowns, e.g. Tryke
+  is_active  TINYINT(1)   NOT NULL DEFAULT 1,     -- inactive: kept on old legs, not offered for new ones
+  sort_order SMALLINT     NOT NULL DEFAULT 0,
+  created_by INT UNSIGNED NULL,
+  created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_transpo_modes_user FOREIGN KEY (created_by) REFERENCES users(user_id) ON DELETE SET NULL
+);
+
+INSERT IGNORE INTO transpo_modes (code, label, sort_order) VALUES
+  ('TRYKE', 'Tryke', 10), ('HABAL', 'Habal-habal', 20), ('PUJ', 'PUJ (jeep)', 30),
+  ('BUS', 'Bus', 40), ('VAN', 'Van', 50), ('CAR', 'Car', 60), ('OTHER', 'Other', 90);
+
 -- 3. ROUTE FARE MASTER LIST.
 CREATE TABLE IF NOT EXISTS transpo_route_rates (
   id               INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   from_location_id INT UNSIGNED NOT NULL,
   to_location_id   INT UNSIGNED NOT NULL,
-  mode             ENUM('TRYKE', 'HABAL', 'PUJ', 'OTHER') NOT NULL,
+  mode             VARCHAR(20)  NOT NULL,          -- transpo_modes.code
   fare             DECIMAL(8,2) NOT NULL,
   is_two_way       TINYINT(1) NOT NULL DEFAULT 1,            -- A->B and B->A use the same fare
   status           ENUM('approved', 'pending') NOT NULL DEFAULT 'approved',
@@ -182,6 +217,7 @@ CREATE TABLE IF NOT EXISTS transpo_route_rates (
   KEY idx_transpo_route_status (status),
   CONSTRAINT fk_transpo_route_from FOREIGN KEY (from_location_id) REFERENCES transpo_locations(id),
   CONSTRAINT fk_transpo_route_to   FOREIGN KEY (to_location_id)   REFERENCES transpo_locations(id),
+  CONSTRAINT fk_transpo_rates_mode FOREIGN KEY (mode) REFERENCES transpo_modes(code) ON UPDATE CASCADE,
   CONSTRAINT fk_transpo_route_created_by  FOREIGN KEY (created_by)  REFERENCES users(user_id) ON DELETE SET NULL,
   CONSTRAINT fk_transpo_route_approved_by FOREIGN KEY (approved_by) REFERENCES users(user_id) ON DELETE SET NULL
 );
@@ -235,7 +271,7 @@ CREATE TABLE IF NOT EXISTS transpo_trip_legs (
   seq              TINYINT UNSIGNED NOT NULL,
   from_location_id INT UNSIGNED NOT NULL,
   to_location_id   INT UNSIGNED NOT NULL,
-  mode             ENUM('TRYKE', 'HABAL', 'PUJ', 'OTHER') NOT NULL,
+  mode             VARCHAR(20)  NOT NULL,          -- transpo_modes.code
   fare             DECIMAL(8,2) NOT NULL,
   route_rate_id    INT UNSIGNED NULL,
   fare_overridden  TINYINT(1) NOT NULL DEFAULT 0,
@@ -243,6 +279,7 @@ CREATE TABLE IF NOT EXISTS transpo_trip_legs (
   CONSTRAINT fk_transpo_legs_visit FOREIGN KEY (visit_id) REFERENCES transpo_ticket_visits(id) ON DELETE CASCADE,
   CONSTRAINT fk_transpo_legs_from  FOREIGN KEY (from_location_id) REFERENCES transpo_locations(id),
   CONSTRAINT fk_transpo_legs_to    FOREIGN KEY (to_location_id)   REFERENCES transpo_locations(id),
+  CONSTRAINT fk_transpo_legs_mode  FOREIGN KEY (mode) REFERENCES transpo_modes(code) ON UPDATE CASCADE,
   CONSTRAINT fk_transpo_legs_rate  FOREIGN KEY (route_rate_id) REFERENCES transpo_route_rates(id) ON DELETE SET NULL
 );
 
@@ -372,7 +409,10 @@ CREATE TABLE IF NOT EXISTS atw_requests (
 CREATE TABLE IF NOT EXISTS serial_inventory (
   id              INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   serial          VARCHAR(100) NOT NULL,
+  label_id        INT UNSIGNED NULL,                  -- CBG-MP, CBG-AB, TBG … (terminal_labels); NULL = no label
   registered_date DATE         NOT NULL,
   UNIQUE KEY uq_serial_inventory_serial (serial),
-  KEY idx_serial_inventory_date (registered_date)
+  KEY idx_serial_inventory_date (registered_date),
+  KEY idx_serial_inventory_label (label_id),
+  CONSTRAINT fk_serial_inventory_label FOREIGN KEY (label_id) REFERENCES terminal_labels(id)
 );

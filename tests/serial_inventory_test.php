@@ -61,26 +61,30 @@ check('bad format rejected',       serial_date_valid('10/19/2026', '2026-10-19')
 
 echo "\nRegister and check (in-memory SQLite copy of serial_inventory)\n";
 $pdo = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-$pdo->exec('CREATE TABLE serial_inventory (id INTEGER PRIMARY KEY AUTOINCREMENT, serial VARCHAR(100) NOT NULL UNIQUE, registered_date DATE NOT NULL)');
+$pdo->exec('CREATE TABLE serial_inventory (id INTEGER PRIMARY KEY AUTOINCREMENT, serial VARCHAR(100) NOT NULL UNIQUE, label_id INTEGER NULL, registered_date DATE NOT NULL)');
 
-$first = register_serial($pdo, clean_serial('SN: 2367kd8e6059'), '2026-10-01');
+// Label ids as in terminal_labels: 1 = CBG-MP, 2 = CBG-AB, 3 = TBG.
+$first = register_serial($pdo, clean_serial('SN: 2367kd8e6059'), '2026-10-01', 2);
 check('register new -> registered',        [$first['status'], $first['serial'], $first['date']], ['registered', '2367KD8E6059', '2026-10-01']);
-$again = register_serial($pdo, clean_serial("MODEL: DX8000\nS/N 2367KD8E6059"), '2026-10-19');
+check('new serial gets the picked label',  [$first['label_id'], (int) $pdo->query("SELECT label_id FROM serial_inventory")->fetchColumn()], [2, 2]);
+$again = register_serial($pdo, clean_serial("MODEL: DX8000\nS/N 2367KD8E6059"), '2026-10-19', 1);
 check('register duplicate -> exists',      [$again['status'], $again['serial']], ['exists', '2367KD8E6059']);
 check('duplicate keeps the first date',    $again['date'], '2026-10-01');
+check('duplicate keeps its own label',     $again['label_id'], 2);
 check('duplicate points at the same row',  $again['id'], $first['id']);
 check('duplicate is not saved twice',      (int) $pdo->query("SELECT COUNT(*) FROM serial_inventory")->fetchColumn(), 1);
 
 $found = check_serial($pdo, '2367KD8E6059');
-check('check found -> exists with date',   [$found['status'], $found['date']], ['exists', '2026-10-01']);
+check('check found -> exists with date and label', [$found['status'], $found['date'], $found['label_id']], ['exists', '2026-10-01', 2]);
 $missing = check_serial($pdo, 'ZZ0000001');
-check('check not found -> not_found',      [$missing['status'], $missing['date'], $missing['id']], ['not_found', null, null]);
+check('check not found -> not_found',      [$missing['status'], $missing['date'], $missing['id'], $missing['label_id']], ['not_found', null, null, null]);
 check('check saves nothing',               (int) $pdo->query("SELECT COUNT(*) FROM serial_inventory")->fetchColumn(), 1);
 
-register_serial($pdo, 'PAX-A920-0001', '2026-10-05');
-check('bulk lookup returns only existing serials', serial_dates($pdo, ['2367KD8E6059', 'NOPE123', 'PAX-A920-0001', '2367KD8E6059']),
-    ['2367KD8E6059' => '2026-10-01', 'PAX-A920-0001' => '2026-10-05']);
-check('bulk lookup of nothing',            serial_dates($pdo, []), []);
+$noLabel = register_serial($pdo, 'PAX-A920-0001', '2026-10-05');
+check('register without a label',          $noLabel['label_id'], null);
+check('bulk lookup returns only existing serials', serial_lookup($pdo, ['2367KD8E6059', 'NOPE123', 'PAX-A920-0001', '2367KD8E6059']),
+    ['2367KD8E6059' => ['date' => '2026-10-01', 'label_id' => 2], 'PAX-A920-0001' => ['date' => '2026-10-05', 'label_id' => null]]);
+check('bulk lookup of nothing',            serial_lookup($pdo, []), []);
 
 echo "\n$passed passed, $failed failed\n";
 exit($failed ? 1 : 0);

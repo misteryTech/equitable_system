@@ -260,7 +260,7 @@ require __DIR__ . '/includes/sidebar.php';
 
   </main><!-- End #main -->
 
-  <script src="assets/js/email-generator.js"></script>
+  <script src="<?= asset('assets/js/email-generator.js') ?>"></script>
   <script>
     document.querySelectorAll(".eg-copy").forEach(function (btn) {
       btn.addEventListener("click", function () { EmailGen.copyWithToast(btn.dataset.text, btn.dataset.what); });

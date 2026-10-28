@@ -2,3 +2,38 @@
 <FilesMatch "\.(sql|md|drawio|bak)$">
     Require all denied
 </FilesMatch>
+
+# ---------------------------------------------------------------------------
+# Caching (see DEPLOY.md)
+#   PHP pages, sw.js, manifest.json  never cached: always fresh after an upload
+#   CSS / JS / images / fonts        cached for a year: pages link them with
+#                                    ?v=<file time> (asset() in includes/config.php),
+#                                    so a changed file gets a new URL
+# ---------------------------------------------------------------------------
+<IfModule mod_headers.c>
+    <FilesMatch "\.(css|js|mjs|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|otf|eot)$">
+        Header set Cache-Control "public, max-age=31536000"
+    </FilesMatch>
+
+    <FilesMatch "\.php$">
+        Header set Cache-Control "no-cache, no-store, must-revalidate"
+        Header set Pragma "no-cache"
+        Header set Expires "0"
+    </FilesMatch>
+
+    # Listed after the static-file rule so sw.js is not cached for a year.
+    <FilesMatch "^(sw\.js|manifest\.json)$">
+        Header set Cache-Control "no-cache, no-store, must-revalidate"
+        Header set Pragma "no-cache"
+        Header set Expires "0"
+    </FilesMatch>
+</IfModule>
+
+# Hostinger runs LiteSpeed: keep its page cache (LSCache) off for this system,
+# because every page shows live, per-user data.
+<IfModule LiteSpeed>
+    <IfModule mod_rewrite.c>
+        RewriteEngine On
+        RewriteRule .* - [E=Cache-Control:no-cache]
+    </IfModule>
+</IfModule>

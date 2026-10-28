@@ -1,12 +1,13 @@
 <?php
 /**
  * Serial Inventory — Records: every registered serial with its registered date, newest first.
- * Search, date range, Copy all (for Excel), CSV export and Bulk check (paste many
+ * Search, date range, label filter, Copy all (for Excel), CSV export and Bulk check (paste many
  * serials, see which exist, register the missing ones) for everyone;
  * admins can also edit (serial stays unique) or delete entries.
  */
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/serial_inventory.php';
+require_once __DIR__ . '/includes/terminals.php';
 $user    = require_role('field_engineer', 'admin');
 $isAdmin = is_admin($user);
 
@@ -17,6 +18,9 @@ $errors     = [];
 $bulk       = null;            // results of a bulk check / register
 $bulkText   = '';
 const SERIAL_BULK_MAX = 1000;  // lines per bulk check
+
+$labels = terminal_labels();   // CBG-MP, CBG-AB, TBG … keyed by id (active and inactive)
+$labelName = static fn($id): string => $id !== null && isset($labels[(int) $id]) ? $labels[(int) $id]['name'] : '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
@@ -42,21 +46,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $seen[$serial] = true;
                 }
             }
+            $bulkLabel = (int) ($_POST['label_id'] ?? 0);
+            if ($action === 'bulk_register' && $bulkLabel && empty($labels[$bulkLabel]['is_active'])) {
+                $errors[] = 'That label is no longer available. Please pick another label.';
+                $action   = 'bulk_check';
+            }
             if ($action === 'bulk_register') {
                 foreach (array_keys($seen) as $serial) {
-                    $done = register_serial(db(), $serial, $today);
+                    $done = register_serial(db(), $serial, $today, $bulkLabel ?: null);
                     if ($done['status'] === 'registered') {
                         $seen[$serial] = 'new';
                     }
                 }
             }
-            $dates = serial_dates(db(), array_keys($seen));
+            $found = serial_lookup(db(), array_keys($seen));
             foreach ($bulk as &$row) {
                 if ($row['serial'] === null) {
                     $row['status'] = 'invalid';
-                } elseif (isset($dates[$row['serial']])) {
+                } elseif (isset($found[$row['serial']])) {
                     $row['status'] = !$row['repeat'] && ($seen[$row['serial']] ?? null) === 'new' ? 'registered' : 'exists';
-                    $row['date']   = $dates[$row['serial']];
+                    $row['date']   = $found[$row['serial']]['date'];
+                    $row['label']  = $labelName($found[$row['serial']]['label_id']);
                 } else {
                     $row['status'] = 'not_found';
                 }
@@ -69,7 +79,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } elseif ($action === 'update') {
             $serial = clean_serial((string) ($_POST['serial'] ?? ''));
             $date   = (string) ($_POST['registered_date'] ?? '');
-            if ($serial === null) {
+            $editLabel = (int) ($_POST['label_id'] ?? 0);
+            if ($editLabel && !isset($labels[$editLabel])) {
+                $_SESSION['flash'] = ['danger', 'Not saved: please pick a label from the list.'];
+            } elseif ($serial === null) {
                 $_SESSION['flash'] = ['danger', 'Not saved: no valid serial number (letters, numbers and - / . _ only, 3 to 100 characters).'];
             } elseif (!serial_date_valid($date, $today)) {
                 $_SESSION['flash'] = ['danger', 'Not saved: please pick a valid date (today or earlier).'];
@@ -79,7 +92,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $_SESSION['flash'] = ['danger', "Not saved: $serial is already registered (since " . date('M j, Y', strtotime($other['date'])) . ').'];
                 } else {
                     try {
-                        db()->prepare('UPDATE serial_inventory SET serial = ?, registered_date = ? WHERE id = ?')->execute([$serial, $date, $id]);
+                        db()->prepare('UPDATE serial_inventory SET serial = ?, label_id = ?, registered_date = ? WHERE id = ?')->execute([$serial, $editLabel ?: null, $date, $id]);
                         $_SESSION['flash'] = ['success', "Saved $serial."];
                     } catch (PDOException $ex) {
                         if ($ex->getCode() !== '23000') {
@@ -94,7 +107,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->execute([$id]);
             $_SESSION['flash'] = $stmt->rowCount() ? ['success', 'Serial deleted.'] : ['warning', 'Serial not found.'];
         }
-        redirect('serial_records.php?' . http_build_query(array_intersect_key($_POST, array_flip(['q', 'from', 'to']))));
+        redirect('serial_records.php?' . http_build_query(array_intersect_key($_POST, array_flip(['q', 'from', 'to', 'label']))));
     }
 }
 
@@ -111,6 +124,10 @@ $to   = $isDate($_GET['to'] ?? '') ? $_GET['to'] : '';
 if ($from !== '' && $to !== '' && $from > $to) {
     [$from, $to] = [$to, $from];
 }
+$labelFilter = (string) ($_GET['label'] ?? '');
+if ($labelFilter !== 'none' && !isset($labels[(int) $labelFilter])) {
+    $labelFilter = '';
+}
 
 $where  = '1 = 1';
 $params = [];
@@ -126,7 +143,13 @@ if ($to !== '') {
     $where   .= ' AND registered_date <= ?';
     $params[] = $to;
 }
-$select = "SELECT id, serial, registered_date FROM serial_inventory WHERE $where ORDER BY registered_date DESC, id DESC";
+if ($labelFilter === 'none') {
+    $where .= ' AND label_id IS NULL';
+} elseif ($labelFilter !== '') {
+    $where   .= ' AND label_id = ?';
+    $params[] = (int) $labelFilter;
+}
+$select = "SELECT id, serial, label_id, registered_date FROM serial_inventory WHERE $where ORDER BY registered_date DESC, id DESC";
 
 // CSV export: every matching row.
 if (($_GET['export'] ?? '') === 'csv') {
@@ -136,10 +159,10 @@ if (($_GET['export'] ?? '') === 'csv') {
     header('Content-Disposition: attachment; filename="serial-inventory' . ($from !== '' ? "-from-$from" : '') . ($to !== '' ? "-to-$to" : '') . '.csv"');
     $out = fopen('php://output', 'w');
     fwrite($out, "\xEF\xBB\xBF");   // BOM so Excel reads UTF-8
-    fputcsv($out, ['Serial', 'Registered Date']);
+    fputcsv($out, ['Serial', 'Registered Date', 'Label']);
     while ($row = $stmt->fetch()) {
         // Serials never start with = + - @ (see SERIAL_PATTERN), so no formula escaping is needed.
-        fputcsv($out, [$row['serial'], $row['registered_date']]);
+        fputcsv($out, [$row['serial'], $row['registered_date'], $labelName($row['label_id'])]);
     }
     fclose($out);
     exit;
@@ -154,7 +177,7 @@ $stmt  = db()->prepare("$select LIMIT $limit");
 $stmt->execute($params);
 $rows = $stmt->fetchAll();
 
-$filters = array_filter(['q' => $q, 'from' => $from, 'to' => $to], 'strlen');
+$filters = array_filter(['q' => $q, 'from' => $from, 'to' => $to, 'label' => $labelFilter], 'strlen');
 
 $bulkCounts = ['registered' => 0, 'exists' => 0, 'not_found' => 0, 'invalid' => 0];
 foreach ($bulk ?? [] as $row) {
@@ -205,8 +228,17 @@ require __DIR__ . '/includes/sidebar.php';
               <?= csrf_field() ?>
               <label for="bulkSerials" class="form-label small">Serials, one per line (up to <?= SERIAL_BULK_MAX ?>). Text like "SN: …" is cleaned the same way as a scan.</label>
               <textarea name="serials" id="bulkSerials" class="form-control font-monospace" rows="6" placeholder="2367KD8E6059&#10;SN: PAX-A920-0001&#10;…"><?= e($bulkText) ?></textarea>
-              <div class="d-flex flex-wrap gap-2 mt-2">
+              <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
                 <button type="submit" name="action" value="bulk_check" class="btn btn-primary"><i class="bi bi-search"></i> Check</button>
+<?php if ($bulk !== null && $bulkCounts['not_found'] > 0): ?>
+                <label for="bulkLabel" class="small ms-2">Label for new serials</label>
+                <select name="label_id" id="bulkLabel" class="form-select form-select-sm" style="width: auto">
+                  <option value="0">No label</option>
+<?php foreach ($labels as $l): if (!$l['is_active']) { continue; } ?>
+                  <option value="<?= (int) $l['id'] ?>" <?= (int) ($_POST['label_id'] ?? 0) === $l['id'] ? 'selected' : '' ?>><?= e($l['name']) ?></option>
+<?php endforeach; ?>
+                </select>
+<?php endif; ?>
 <?php if ($bulk !== null && $bulkCounts['not_found'] > 0): ?>
                 <button type="submit" name="action" value="bulk_register" class="btn btn-success" onclick="return confirm('Register <?= (int) $bulkCounts['not_found'] ?> missing serial<?= $bulkCounts['not_found'] === 1 ? '' : 's' ?> with today\'s date?')">
                   <i class="bi bi-plus-circle"></i> Register all missing (<?= (int) $bulkCounts['not_found'] ?>)
@@ -229,7 +261,7 @@ require __DIR__ . '/includes/sidebar.php';
             </div>
             <div class="table-responsive" style="max-height: 24rem">
               <table class="table table-sm align-middle mb-0">
-                <thead><tr><th>#</th><th>Pasted</th><th>Serial</th><th>Status</th><th>Registered</th></tr></thead>
+                <thead><tr><th>#</th><th>Pasted</th><th>Serial</th><th>Status</th><th>Registered</th><th>Label</th></tr></thead>
                 <tbody>
 <?php foreach ($bulk as $i => $row): ?>
                   <tr>
@@ -238,6 +270,7 @@ require __DIR__ . '/includes/sidebar.php';
                     <td class="font-monospace text-break"><?= e($row['serial'] ?? '') ?></td>
                     <td><span class="badge <?= e($bulkLook[$row['status']][0]) ?>"><?= e($bulkLook[$row['status']][1]) ?></span><?= $row['repeat'] ? ' <span class="small text-muted">(listed twice)</span>' : '' ?></td>
                     <td class="text-nowrap small"><?= isset($row['date']) ? e(date('M j, Y', strtotime($row['date']))) : '' ?></td>
+                    <td class="small"><?= e($row['label'] ?? '') ?></td>
                   </tr>
 <?php endforeach; ?>
                 </tbody>
@@ -252,7 +285,7 @@ require __DIR__ . '/includes/sidebar.php';
         <div class="card-body pt-3">
 
           <form method="get" class="row g-2 align-items-end mb-3">
-            <div class="col-md-4">
+            <div class="col-md-3">
               <label for="fQ" class="form-label">Serial</label>
               <input type="search" name="q" id="fQ" class="form-control font-monospace text-uppercase" placeholder="Search serial…" value="<?= e($q) ?>">
             </div>
@@ -264,7 +297,17 @@ require __DIR__ . '/includes/sidebar.php';
               <label for="fTo" class="form-label">To</label>
               <input type="date" name="to" id="fTo" class="form-control" value="<?= e($to) ?>">
             </div>
-            <div class="col-md-4 d-flex flex-wrap gap-2">
+            <div class="col-6 col-md-2">
+              <label for="fLabel" class="form-label">Label</label>
+              <select name="label" id="fLabel" class="form-select">
+                <option value="">All</option>
+<?php foreach ($labels as $l): ?>
+                <option value="<?= (int) $l['id'] ?>" <?= $labelFilter === (string) $l['id'] ? 'selected' : '' ?>><?= e($l['name']) ?><?= $l['is_active'] ? '' : ' (inactive)' ?></option>
+<?php endforeach; ?>
+                <option value="none" <?= $labelFilter === 'none' ? 'selected' : '' ?>>No label</option>
+              </select>
+            </div>
+            <div class="col-6 col-md-3 d-flex flex-wrap align-items-end gap-2">
               <button type="submit" class="btn btn-primary"><i class="bi bi-funnel"></i> Filter</button>
 <?php if ($filters): ?>
               <a href="serial_records.php" class="btn btn-outline-secondary">Clear</a>
@@ -288,6 +331,7 @@ require __DIR__ . '/includes/sidebar.php';
                 <tr>
                   <th>Serial</th>
                   <th>Registered Date</th>
+                  <th>Label</th>
 <?php if ($isAdmin): ?>
                   <th class="text-end">Action</th>
 <?php endif; ?>
@@ -300,9 +344,10 @@ require __DIR__ . '/includes/sidebar.php';
                 <tr>
                   <td class="font-monospace text-break"><?= e($r['serial']) ?></td>
                   <td class="text-nowrap"><?= e($shownDate) ?></td>
+                  <td><?= $r['label_id'] !== null && isset($labels[(int) $r['label_id']]) ? terminal_label_badge((int) $r['label_id'], $labels[(int) $r['label_id']]['name']) : '<span class="text-muted small">—</span>' ?></td>
 <?php if ($isAdmin): ?>
                   <td class="text-end text-nowrap">
-                    <button type="button" class="btn btn-sm btn-outline-primary edit-serial" data-id="<?= (int) $r['id'] ?>" data-serial="<?= e($r['serial']) ?>" data-date="<?= e($r['registered_date']) ?>" title="Edit" aria-label="Edit <?= e($r['serial']) ?>"><i class="bi bi-pencil"></i></button>
+                    <button type="button" class="btn btn-sm btn-outline-primary edit-serial" data-id="<?= (int) $r['id'] ?>" data-serial="<?= e($r['serial']) ?>" data-date="<?= e($r['registered_date']) ?>" data-label="<?= (int) $r['label_id'] ?>" title="Edit" aria-label="Edit <?= e($r['serial']) ?>"><i class="bi bi-pencil"></i></button>
                     <form method="post" class="d-inline" onsubmit="return confirm('Delete serial <?= e($r['serial']) ?> (registered <?= e($shownDate) ?>)? This cannot be undone.')">
                       <?= csrf_field() ?>
                       <input type="hidden" name="action" value="delete">
@@ -317,7 +362,7 @@ require __DIR__ . '/includes/sidebar.php';
                 </tr>
 <?php endforeach; ?>
 <?php if (!$rows): ?>
-                <tr><td colspan="<?= $isAdmin ? 3 : 2 ?>" class="text-muted text-center py-4"><?= $filters ? 'No serials match your filters.' : 'No serials registered yet.' ?></td></tr>
+                <tr><td colspan="<?= $isAdmin ? 4 : 3 ?>" class="text-muted text-center py-4"><?= $filters ? 'No serials match your filters.' : 'No serials registered yet.' ?></td></tr>
 <?php endif; ?>
               </tbody>
             </table>
@@ -353,9 +398,18 @@ require __DIR__ . '/includes/sidebar.php';
             <input type="text" name="serial" id="smSerial" class="form-control font-monospace text-uppercase" maxlength="100" required>
             <div class="form-text">Each serial can be registered only once.</div>
           </div>
-          <div>
+          <div class="mb-3">
             <label for="smDate" class="form-label">Registered date</label>
             <input type="date" name="registered_date" id="smDate" class="form-control" max="<?= e($today) ?>" required>
+          </div>
+          <div>
+            <label for="smLabel" class="form-label">Label</label>
+            <select name="label_id" id="smLabel" class="form-select">
+              <option value="0">No label</option>
+<?php foreach ($labels as $l): ?>
+              <option value="<?= (int) $l['id'] ?>"><?= e($l['name']) ?><?= $l['is_active'] ? '' : ' (inactive)' ?></option>
+<?php endforeach; ?>
+            </select>
           </div>
         </div>
         <div class="modal-footer">
@@ -367,7 +421,7 @@ require __DIR__ . '/includes/sidebar.php';
   </div>
 <?php endif; ?>
 
-  <script src="assets/js/email-generator.js"></script>
+  <script src="<?= asset('assets/js/email-generator.js') ?>"></script>
   <script>
     (function () {
       // Tab-separated rows paste into Excel as columns.
@@ -378,12 +432,12 @@ require __DIR__ . '/includes/sidebar.php';
         });
       }
 
-      var rows = <?= json_encode(array_map(fn($r) => [$r['serial'], $r['registered_date']], $rows)) ?>;
-      document.getElementById("copyAll").addEventListener("click", function () { copyRows(["Serial", "Registered Date"], rows, "serial"); });
+      var rows = <?= json_encode(array_map(fn($r) => [$r['serial'], $r['registered_date'], $labelName($r['label_id'])], $rows)) ?>;
+      document.getElementById("copyAll").addEventListener("click", function () { copyRows(["Serial", "Registered Date", "Label"], rows, "serial"); });
 
 <?php if ($bulk !== null): ?>
-      var bulk = <?= json_encode(array_map(fn($r) => [$r['line'], (string) $r['serial'], $bulkLook[$r['status']][1], $r['date'] ?? ''], $bulk)) ?>;
-      document.getElementById("copyBulk").addEventListener("click", function () { copyRows(["Pasted", "Serial", "Status", "Registered Date"], bulk, "row"); });
+      var bulk = <?= json_encode(array_map(fn($r) => [$r['line'], (string) $r['serial'], $bulkLook[$r['status']][1], $r['date'] ?? '', $r['label'] ?? ''], $bulk)) ?>;
+      document.getElementById("copyBulk").addEventListener("click", function () { copyRows(["Pasted", "Serial", "Status", "Registered Date", "Label"], bulk, "row"); });
 <?php endif; ?>
 
       document.querySelectorAll(".edit-serial").forEach(function (btn) {
@@ -391,6 +445,7 @@ require __DIR__ . '/includes/sidebar.php';
           document.getElementById("smId").value = btn.dataset.id;
           document.getElementById("smSerial").value = btn.dataset.serial;
           document.getElementById("smDate").value = btn.dataset.date;
+          document.getElementById("smLabel").value = btn.dataset.label || "0";
           bootstrap.Modal.getOrCreateInstance(document.getElementById("serialModal")).show();
         });
       });

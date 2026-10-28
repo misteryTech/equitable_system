@@ -4,11 +4,13 @@
  * at once whether a serial is already registered.
  *   Register mode   new serial -> saved with today's date; existing -> not saved, shows its date
  *   Check only mode nothing saved; shows whether the serial exists
+ * New serials get the label picked at the top (CBG-MP, CBG-AB, TBG … from Terminal Labels).
  * Camera via html5-qrcode (stored locally), a photo from the phone camera, or typing.
  * AJAX endpoint: POST action=scan (raw, mode) -> JSON {status: registered|exists|not_found, serial, date}.
  */
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/serial_inventory.php';
+require_once __DIR__ . '/includes/terminals.php';
 $user = require_role('field_engineer', 'admin');
 
 $pageTitle  = 'Scan Serials';
@@ -53,7 +55,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $respond(['errors' => [$shown === '' ? 'Nothing to check.' : "No serial number found in \"$shown\"."]], 422);
         }
 
-        $result = $mode === 'check' ? check_serial(db(), $serial) : register_serial(db(), $serial, $today);
+        // Label for new serials: an active label from Terminal Labels, or none.
+        $labelId = (int) ($_POST['label_id'] ?? 0);
+        $labels  = terminal_labels();
+        if ($labelId && empty($labels[$labelId]['is_active'])) {
+            $respond(['errors' => ['That label is no longer available. Please pick another label.']], 422);
+        }
+
+        $result = $mode === 'check' ? check_serial(db(), $serial) : register_serial(db(), $serial, $today, $labelId ?: null);
+        $shown  = $result['label_id'] !== null ? ($labels[$result['label_id']] ?? null) : null;
         if ($result['status'] === 'registered') {
             $mine[] = $result['id'];
             $mine   = array_slice($mine, -500);
@@ -66,6 +76,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'date'       => $result['date'],
             'date_label' => $label($result['date']),
             'id'         => $result['status'] === 'registered' ? $result['id'] : null,
+            'label'      => $shown ? $shown['name'] : null,
+            'label_class'=> $shown ? terminal_label_badge_class($shown['id']) : null,
         ]);
     }
 
@@ -110,6 +122,15 @@ require __DIR__ . '/includes/sidebar.php';
             <label class="btn btn-outline-primary" for="siModeRegister"><i class="bi bi-plus-circle"></i> Register</label>
             <input type="radio" class="btn-check" name="siMode" id="siModeCheck" value="check" autocomplete="off">
             <label class="btn btn-outline-primary" for="siModeCheck"><i class="bi bi-search"></i> Check only</label>
+          </div>
+          <div class="d-flex align-items-center gap-2">
+            <label for="siLabel" class="form-label mb-0 fw-semibold">Label</label>
+            <select id="siLabel" class="form-select" style="width: auto">
+              <option value="0">No label</option>
+<?php foreach (terminal_labels(true) as $l): ?>
+              <option value="<?= (int) $l['id'] ?>"><?= e($l['name']) ?></option>
+<?php endforeach; ?>
+            </select>
           </div>
           <div class="small text-muted" id="siModeHelp"></div>
         </div>
@@ -191,13 +212,13 @@ require __DIR__ . '/includes/sidebar.php';
     #siReader video { width: 100% !important; height: auto !important; }
   </style>
 
-  <script src="assets/js/html5-qrcode.min.js"></script>
-  <script src="assets/js/email-generator.js"></script>
+  <script src="<?= asset('assets/js/html5-qrcode.min.js') ?>"></script>
+  <script src="<?= asset('assets/js/email-generator.js') ?>"></script>
   <script>
     (function () {
       var csrf = <?= json_encode(csrf_token()) ?>;
       var REPEAT_MS = 3000;                    // the same code read again within 3 s is ignored
-      var MODE_KEY = "serialScanMode", CAMERA_KEY = "serialScanCamera";
+      var MODE_KEY = "serialScanMode", CAMERA_KEY = "serialScanCamera", LABEL_KEY = "serialScanLabel";
       var scanner = null, fileScanner = null, audio = null;
       var cameras = [];
       var lastText = "", lastAt = 0;
@@ -271,11 +292,18 @@ require __DIR__ . '/includes/sidebar.php';
       /* ---------- Mode ---------- */
 
       function mode() { return document.querySelector('input[name="siMode"]:checked').value; }
+      function labelId() { return $("siLabel").value; }
+      function labelName() { var o = $("siLabel").selectedOptions[0]; return o && o.value !== "0" ? o.textContent : ""; }
       function showMode() {
         $("siModeHelp").textContent = mode() === "check"
-          ? "Check only: shows whether each serial is registered. Nothing is saved."
-          : "Register: new serials are saved with today's date (<?= e(date('M j, Y', strtotime($today))) ?>). Serials already registered are not saved again.";
+          ? "Check only: shows whether each serial is registered, and its label. Nothing is saved."
+          : "Register: new serials are saved with today's date (<?= e(date('M j, Y', strtotime($today))) ?>)" +
+            (labelName() ? " and the label " + labelName() : " and no label") + ". Serials already registered are not saved again.";
       }
+      // The label picked last time (if it is still in the list).
+      var savedLabel = store(LABEL_KEY);
+      if (savedLabel && $("siLabel").querySelector('option[value="' + savedLabel.replace(/\D/g, "") + '"]')) { $("siLabel").value = savedLabel; }
+      $("siLabel").addEventListener("change", function () { store(LABEL_KEY, labelId()); showMode(); });
       var savedMode = store(MODE_KEY);
       if (savedMode === "check") { $("siModeCheck").checked = true; }
       document.querySelectorAll('input[name="siMode"]').forEach(function (r) {
@@ -320,12 +348,21 @@ require __DIR__ . '/includes/sidebar.php';
         return "";
       }
 
-      function showResult(look, serial, detail, action) {
+      function labelBadge(json) {
+        return json && json.label ? el("span", "badge " + json.label_class, json.label) : el("span", "badge bg-light text-muted border", "no label");
+      }
+
+      function showResult(look, serial, detail, action, json) {
         var card = $("siResult");
         card.className = "rounded p-3 mb-3 text-center border " + LOOK[look].cls;
         card.innerHTML = "";
         card.append(el("div", "font-monospace fw-semibold si-serial", serial));
         card.append(el("div", "si-status", LOOK[look].status));
+        if (json && (json.status === "registered" || json.status === "exists")) {
+          var tag = el("div", "mb-1");
+          tag.append(labelBadge(json));
+          card.append(tag);
+        }
         if (detail) { card.append(el("div", "small", detail)); }
         if (action) { var wrap = el("div", "mt-2"); wrap.append(action); card.append(wrap); }
       }
@@ -357,7 +394,7 @@ require __DIR__ . '/includes/sidebar.php';
 
       // One row per scan; it is updated in place (Register now, Undo).
       function addRow(json) {
-        var row = { serial: json.serial, look: lookFor(json), date: json.date || "", time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) };
+        var row = { serial: json.serial, look: lookFor(json), date: json.date || "", label: json.label || "", time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) };
         rows.unshift(row);
         var li = el("li", "list-group-item d-flex flex-wrap align-items-center gap-2");
         row.li = li;
@@ -373,6 +410,7 @@ require __DIR__ . '/includes/sidebar.php';
         li.append(el("span", "font-monospace fw-semibold text-break", row.serial));
         var badge = { registered: "bg-success", exists_register: "bg-warning text-dark", exists_check: "bg-success", not_found: "bg-danger", removed: "bg-light text-muted border" }[row.look];
         li.append(el("span", "badge " + badge, row.look === "removed" ? "Removed" : LOOK[row.look].status));
+        if (json && row.look !== "not_found" && row.look !== "removed") { li.append(labelBadge(json)); }
         var actions = el("span", "ms-auto d-flex gap-1 align-items-center");
         actions.append(el("span", "small text-muted", (row.date && row.look !== "removed" && row.look !== "not_found" ? dateLabel(row.date) + " · " : "") + row.time));
         if (row.look === "registered" && json && json.id) {
@@ -400,14 +438,14 @@ require __DIR__ . '/includes/sidebar.php';
 
       function registerNow(row, btn) {
         if (btn) { btn.disabled = true; }
-        post({ action: "scan", raw: row.serial, mode: "register" }).then(function (json) {
+        post({ action: "scan", raw: row.serial, mode: "register", label_id: labelId() }).then(function (json) {
           counts.not_found--;
           counts[json.status === "registered" ? "registered" : "exists"]++;
-          row.look = lookFor(json); row.date = json.date || "";
+          row.look = lookFor(json); row.date = json.date || ""; row.label = json.label || "";
           drawRow(row, json);
           updateCounts();
           beep(json.status);
-          showResult(row.look, json.serial, dateText(json));
+          showResult(row.look, json.serial, dateText(json), null, json);
         }).catch(function (err) {
           if (btn) { btn.disabled = false; }
           beep("error");
@@ -418,7 +456,7 @@ require __DIR__ . '/includes/sidebar.php';
       // Scanned / typed / photo text -> server -> result card + list.
       function handle(raw, source) {
         showResult("pending", raw.trim().slice(0, 60) || "…", source ? "From " + source : "");
-        post({ action: "scan", raw: raw, mode: mode() }).then(function (json) {
+        post({ action: "scan", raw: raw, mode: mode(), label_id: labelId() }).then(function (json) {
           counts[json.status]++;
           var row = addRow(json);
           updateCounts();
@@ -429,7 +467,7 @@ require __DIR__ . '/includes/sidebar.php';
             action.addEventListener("click", function () { registerNow(row, action); });
           }
           var cleaned = raw.trim().toUpperCase() !== json.serial ? " · read as \"" + raw.trim().replace(/\s+/g, " ").slice(0, 40) + "\"" : "";
-          showResult(row.look, json.serial, dateText(json) + cleaned, action);
+          showResult(row.look, json.serial, dateText(json) + cleaned, action, json);
         }).catch(function (err) {
           beep("error");
           showResult("error", raw.trim().slice(0, 60) || "…", Array.isArray(err) ? err.join(" ") : "Could not reach the server. Check your connection.");
@@ -438,8 +476,9 @@ require __DIR__ . '/includes/sidebar.php';
 
       $("siCopy").addEventListener("click", function () {
         var names = { registered: "Registered", exists_register: "Already registered", exists_check: "Exists", not_found: "Not registered", removed: "Removed" };
-        var text = "Serial\tStatus\tRegistered Date\r\n" + rows.slice().reverse().map(function (r) {
-          return [r.serial, names[r.look], r.look === "not_found" || r.look === "removed" ? "" : r.date].join("\t");
+        var text = "Serial\tStatus\tRegistered Date\tLabel\r\n" + rows.slice().reverse().map(function (r) {
+          var gone = r.look === "not_found" || r.look === "removed";
+          return [r.serial, names[r.look], gone ? "" : r.date, gone ? "" : r.label].join("\t");
         }).join("\r\n");
         EmailGen.copyText(text).then(function (ok) {
           EmailGen.toast(ok ? "Copied " + rows.length + " row" + (rows.length === 1 ? "" : "s") + " — paste into Excel." : "Could not copy.", ok ? "success" : "danger");

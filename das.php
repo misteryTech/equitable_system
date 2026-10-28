@@ -2,7 +2,8 @@
 /**
  * My DAS (Data Activity Sheet): built from the user's own time records.
  * Date, filing (Regular / Holiday), schedule, regular hours, early in and OT
- * come from the time logs; the user types the Task for each day.
+ * come from the time logs; the user types the Task for each day and picks whether
+ * it was spent Within the city or Out of town.
  *
  * Leave: the user marks any dates they pick as leave (several at once is fine).
  * On the DAS a leave day shows as "Leave", or "Duty with pay" if they timed in that day.
@@ -64,7 +65,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt->execute([(int) ($_POST['leave_id'] ?? 0), $user['user_id']]);
         $_SESSION['flash'] = $stmt->rowCount() ? ['success', 'Leave day removed.'] : ['warning', 'That leave day was already removed.'];
     } else {
-        $tasks  = (array) ($_POST['task'] ?? []);
+        $tasks   = (array) ($_POST['task'] ?? []);
+        $trips   = (array) ($_POST['trip'] ?? []);
         $tooLong = false;
         foreach ($tasks as $task) {
             if (mb_strlen(trim((string) $task)) > 500) {
@@ -72,18 +74,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
             }
         }
+        $badTrip = array_diff(array_map('strval', $trips), array_keys(TRIP_TYPES));
         if ($tooLong) {
             $_SESSION['flash'] = ['danger', 'A task can be at most 500 characters.'];
+        } elseif ($badTrip) {
+            $_SESSION['flash'] = ['danger', 'Please choose Within the city or Out of town.'];
         } else {
-            // Only the task is saved, and only on the user's own records.
-            $update = db()->prepare('UPDATE time_logs SET task = ? WHERE id = ? AND user_id = ?');
-            $saved  = 0;
+            // Only the task and the location are saved, and only on the user's own records.
+            $saveTask = db()->prepare('UPDATE time_logs SET task = ? WHERE id = ? AND user_id = ?');
+            $saveTrip = db()->prepare('UPDATE time_logs SET trip_type = ? WHERE id = ? AND user_id = ?');
+            $changed  = [];
             foreach ($tasks as $logId => $task) {
                 $task = trim((string) $task);
-                $update->execute([$task === '' ? null : $task, (int) $logId, $user['user_id']]);
-                $saved += $update->rowCount();
+                $saveTask->execute([$task === '' ? null : $task, (int) $logId, $user['user_id']]);
+                if ($saveTask->rowCount()) {
+                    $changed[(int) $logId] = true;
+                }
             }
-            $_SESSION['flash'] = ['success', $saved ? "Saved $saved task" . ($saved === 1 ? '' : 's') . '.' : 'No changes to save.'];
+            foreach ($trips as $logId => $trip) {
+                $saveTrip->execute([(string) $trip, (int) $logId, $user['user_id']]);
+                if ($saveTrip->rowCount()) {
+                    $changed[(int) $logId] = true;
+                }
+            }
+            $saved = count($changed);
+            $_SESSION['flash'] = ['success', $saved ? "Saved $saved day" . ($saved === 1 ? '' : 's') . '.' : 'No changes to save.'];
         }
     }
     redirect($back);
@@ -93,7 +108,7 @@ $flash = $_SESSION['flash'] ?? null;
 unset($_SESSION['flash']);
 
 $stmt = db()->prepare(
-    'SELECT id, work_date, filing_type, sched_in, sched_out, time_out, reg_hrs, early_in_hrs, ot_hrs, task
+    'SELECT id, work_date, filing_type, trip_type, sched_in, sched_out, time_out, reg_hrs, early_in_hrs, ot_hrs, task
      FROM time_logs
      WHERE user_id = ? AND work_date BETWEEN ? AND ?
      ORDER BY work_date'
@@ -121,8 +136,10 @@ foreach ($dates as $date) {
 
 $totals = ['reg_hrs' => 0, 'early_in_hrs' => 0, 'ot_hrs' => 0];
 $counts = array_fill_keys(array_keys(DAY_STATUSES), 0);
+$outOfTown = 0;
 foreach ($rows as $row) {
     $counts[$row['status']]++;
+    $outOfTown += $row['log'] && $row['log']['trip_type'] === 'out_of_town' ? 1 : 0;
     if ($row['log'] && $row['log']['time_out']) {
         foreach ($totals as $key => $sum) {
             $totals[$key] = $sum + $row['log'][$key];
@@ -131,8 +148,8 @@ foreach ($rows as $row) {
 }
 
 // Tab-separated rows for "Copy all":
-// Date, Schedule, Task, Reg Hrs, Early In, OT Hrs, Filing, Status.
-// Filing and Status are last so the earlier Excel columns don't shift.
+// Date, Schedule, Task, Reg Hrs, Early In, OT Hrs, Filing, Status, Location.
+// Filing, Status and Location are last so the earlier Excel columns don't shift.
 // Line breaks in a task become ", " so each day stays on one Excel row.
 $copyRows = array_map(function ($row) {
     $log  = $row['log'];
@@ -146,6 +163,7 @@ $copyRows = array_map(function ($row) {
         $done ? time_log_hours($log['ot_hrs'], true) : '',
         $log ? (FILING_TYPES[$log['filing_type']] ?? $log['filing_type']) : '',
         DAY_STATUSES[$row['status']]['label'],
+        $log ? (TRIP_TYPES[$log['trip_type']] ?? $log['trip_type']) : '',
     ];
 }, $rows);
 
@@ -200,6 +218,7 @@ require __DIR__ . '/includes/sidebar.php';
             <?= day_status_badge('duty') ?> <?= $counts['duty'] ?>
             <span class="ms-2"><?= day_status_badge('duty_with_pay') ?> <?= $counts['duty_with_pay'] ?></span>
             <span class="ms-2"><?= day_status_badge('leave') ?> <?= $counts['leave'] ?></span>
+            <span class="ms-2"><span class="badge bg-info text-dark">Out of town</span> <?= $outOfTown ?></span>
           </p>
 <?php endif; ?>
 
@@ -215,6 +234,7 @@ require __DIR__ . '/includes/sidebar.php';
                     <th class="d-none d-md-table-cell">Schedule</th>
                     <th>Task</th>
                     <th style="width: 6rem">Filing</th>
+                    <th style="width: 10rem">Location</th>
                     <th style="width: 7rem">Status</th>
                     <th class="text-end">Reg Hrs</th>
                     <th class="text-end">Early In</th>
@@ -253,6 +273,17 @@ require __DIR__ . '/includes/sidebar.php';
 <?php endif; ?>
                     </td>
                     <td><?= $log ? time_log_filing_badge($log['filing_type']) : '<span class="text-muted">—</span>' ?></td>
+                    <td>
+<?php if ($log): ?>
+                      <select name="trip[<?= (int) $log['id'] ?>]" class="form-select form-select-sm das-trip" aria-label="Location on <?= e(time_log_date($row['date'])) ?>">
+<?php foreach (TRIP_TYPES as $key => $label): ?>
+                        <option value="<?= e($key) ?>" <?= $log['trip_type'] === $key ? 'selected' : '' ?>><?= e($label) ?></option>
+<?php endforeach; ?>
+                      </select>
+<?php else: ?>
+                      <span class="text-muted">—</span>
+<?php endif; ?>
+                    </td>
                     <td><?= day_status_badge($row['status']) ?></td>
                     <td class="text-end"><?= $done ? e(time_log_hours($log['reg_hrs'], true)) : ($log ? '<span class="text-muted small">on duty</span>' : '') ?></td>
                     <td class="text-end"><?= $done ? e(time_log_hours($log['early_in_hrs'], true)) : '' ?></td>
@@ -260,13 +291,13 @@ require __DIR__ . '/includes/sidebar.php';
                   </tr>
 <?php endforeach; ?>
 <?php if (!$rows): ?>
-                  <tr><td colspan="8" class="text-muted text-center py-4">No time records or leave days in this date range. Use the Time Clock to time in and out, or set a leave day.</td></tr>
+                  <tr><td colspan="9" class="text-muted text-center py-4">No time records or leave days in this date range. Use the Time Clock to time in and out, or set a leave day.</td></tr>
 <?php endif; ?>
                 </tbody>
 <?php if ($rows): ?>
                 <tfoot class="table-light fw-bold">
                   <tr>
-                    <td colspan="5" class="text-end">Total (<?= e(time_log_date($from)) ?> – <?= e(time_log_date($to)) ?>)</td>
+                    <td colspan="6" class="text-end">Total (<?= e(time_log_date($from)) ?> – <?= e(time_log_date($to)) ?>)</td>
                     <td class="text-end"><?= e(time_log_hours($totals['reg_hrs'], true)) ?></td>
                     <td class="text-end"><?= e(time_log_hours($totals['early_in_hrs'], true)) ?></td>
                     <td class="text-end"><?= e(time_log_hours($totals['ot_hrs'], true)) ?></td>
@@ -278,15 +309,15 @@ require __DIR__ . '/includes/sidebar.php';
 
 <?php if ($logsByDate): ?>
             <div class="d-flex align-items-center gap-3">
-              <button type="submit" class="btn btn-primary" id="dasSave"><i class="bi bi-save"></i> Save Tasks</button>
-              <span class="small text-muted">Only the tasks are saved. Date, filing, schedule and hours come from your time records.</span>
+              <button type="submit" class="btn btn-primary" id="dasSave"><i class="bi bi-save"></i> Save</button>
+              <span class="small text-muted">Saves the tasks and locations. Date, filing, schedule and hours come from your time records.</span>
             </div>
 <?php endif; ?>
           </form>
 
           <p class="small text-muted mt-3 mb-0">
             <strong>Status:</strong> Duty = a regular working day · Leave = a day you marked as leave · Duty with pay = you worked on your leave day.
-            <br>"Copy all" copies the rows without headers, tab-separated, in the order Date, Schedule, Task, Reg Hrs, Early In, OT Hrs, Filing, Status. It copies the saved tasks, so save first.
+            <br>"Copy all" copies the rows without headers, tab-separated, in the order Date, Schedule, Task, Reg Hrs, Early In, OT Hrs, Filing, Status, Location. It copies what is saved, so save first.
           </p>
 
         </div>
@@ -360,9 +391,9 @@ require __DIR__ . '/includes/sidebar.php';
       var message = document.getElementById("copyMessage");
       var dirty = false;
 
-      // Warn before leaving with unsaved tasks; block double submits.
+      // Warn before leaving with unsaved tasks or locations; block double submits.
       form.addEventListener("input", function (e) {
-        if (e.target.classList.contains("das-task")) { dirty = true; }
+        if (e.target.classList.contains("das-task") || e.target.classList.contains("das-trip")) { dirty = true; }
       });
       form.addEventListener("submit", function () {
         dirty = false;
@@ -425,7 +456,7 @@ require __DIR__ . '/includes/sidebar.php';
 
       function done() {
         message.textContent = "Copied " + rows.length + " row" + (rows.length === 1 ? "" : "s") + ". Paste into Excel." +
-          (dirty ? " Note: you have unsaved task changes that were not copied." : "");
+          (dirty ? " Note: you have unsaved changes that were not copied." : "");
         message.classList.remove("d-none");
       }
 

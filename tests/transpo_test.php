@@ -90,5 +90,17 @@ check('remark attaches to the next ticket',   [$t[2]['remarks'], $t[3]['remarks'
 check('===== starts a new group',             $t[3]['group'], 2);
 check('unknown line listed as unparsed',      $p['unparsed'], [[1, 'OCT 3']]);
 
+echo "\nTransport modes (register a missing one)\n";
+check('code: capitals',                       transpo_mode_code('Motorela'), 'MOTORELA');
+check('code: spaces and dashes -> _',          [transpo_mode_code('Grab car'), transpo_mode_code('Habal-habal'), transpo_mode_code('PUJ (jeep)')], ['GRAB_CAR', 'HABAL_HABAL', 'PUJ_JEEP']);
+check('code: at most 20 characters, no trailing _', transpo_mode_code('Very long mode name for testing'), 'VERY_LONG_MODE_NAME');
+check('name tidied',                          transpo_mode_clean_label("  grab \t  car "), 'grab car');
+check('valid names',                          [transpo_mode_label_error('Motorela'), transpo_mode_label_error('PUJ (jeep)'), transpo_mode_label_error('Bus / Van')], [null, null, null]);
+check('empty name',                           transpo_mode_label_error(''), 'Type the name of the mode, e.g. Motorela.');
+check('name too long',                        transpo_mode_label_error(str_repeat('a', 51)), 'Mode name must be at most 50 characters.');
+check('odd characters refused',               [transpo_mode_label_error('<b>Bus</b>'), transpo_mode_label_error('-Bus')],
+    ['Mode name may use letters, numbers, spaces and - / ( ) . & +', 'Mode name may use letters, numbers, spaces and - / ( ) . & +']);
+check('import modes are protected',           array_map(fn($w) => in_array(transpo_import_mode($w), TRANSPO_MODE_BUILT_IN, true), ['tryke', 'jeep', 'habal', 'boat']), [true, true, true, true]);
+
 echo "\n$passed passed, $failed failed\n";
 exit($failed ? 1 : 0);
