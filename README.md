@@ -24,7 +24,7 @@ C:\xampp\mysql\bin\mysql -h 127.0.0.1 -P 3308 -u root -p equitable_system < data
 
 ### Version
 
-Every page shows the version in its footer, and the login page shows it under the form (e.g. "Version v1.2.0 · Oct 28, 2026").
+Every page shows the version in its footer, and the login page shows it under the form (e.g. "Version v1.3.0 · Oct 30, 2026").
 If the Hostinger site shows an older number than your PC, it still has old files: upload the new ones and run the
 migrations listed in [CHANGELOG.md](CHANGELOG.md) for the versions it is missing.
 Before each push to GitHub, raise `APP_VERSION` and `APP_RELEASED` in `includes/version.php` and add the changes to `CHANGELOG.md`.

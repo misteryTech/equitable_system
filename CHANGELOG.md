@@ -6,6 +6,17 @@ upload the new files and run the migrations listed for the versions it is missin
 
 Before each push to GitHub, raise the version in `includes/version.php` and add it here.
 
+## 1.3.0 — 2026-10-30
+
+- Terminals: **Remarks** and **FAQ** (questions with answers) on Register / Edit Terminal. Admins can add,
+  edit, reorder and remove FAQs; everyone can read them with the **Remarks & FAQ** button in the list.
+  Search also looks in remarks and FAQs.
+- Dashboard: **Weekly Transpo** (Monday to Sunday) with previous / next week. Field engineers see their own
+  total and each day; admins see every engineer per day, with totals and a link to Transpo Reports.
+
+Migrations:
+- `2026_10_30_terminal_remarks_faq.sql`
+
 ## 1.2.0 — 2026-10-28
 
 - Transportation: modes moved to a list admins manage on **Transport Modes**. A missing mode can be

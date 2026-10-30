@@ -1,7 +1,7 @@
 <?php
 /**
  * Terminals: register terminals (name, up to 3 photos, brand, model, label, BDO / Non-BDO,
- * current version). Labels come from the terminal_labels table (Terminal Labels page).
+ * current version, remarks, FAQs). Labels come from the terminal_labels table (Terminal Labels page).
  * Everyone signed in can view and search; admins add, edit and delete
  * through the modal (saved with AJAX, JSON response).
  */
@@ -68,6 +68,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     [$values, $errors] = terminal_validate($_POST, terminal_labels(), $existing ? (int) $existing['label_id'] : null);
+    [$faqRows, $faqErrors] = terminal_faq_validate($_POST);
+    $errors = array_merge($errors, $faqErrors);
     $name   = $values['terminal_name'];
     $remove = array_map('intval', (array) ($_POST['remove_slot'] ?? []));
 
@@ -100,19 +102,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     $nullable = static fn(string $v): ?string => $v === '' ? null : $v;
-    $fields   = [$name, $values['brand'], $nullable($values['model']), $nullable($values['current_version']), $values['label_id'], $values['bank_type']];
+    $fields   = [$name, $values['brand'], $nullable($values['model']), $nullable($values['current_version']), $values['label_id'], $values['bank_type'], $nullable($values['remarks'])];
 
     $pdo = db();
     $pdo->beginTransaction();
     try {
         if ($existing) {
-            $pdo->prepare('UPDATE terminals SET terminal_name = ?, brand = ?, model = ?, current_version = ?, label_id = ?, bank_type = ? WHERE terminal_id = ?')
+            $pdo->prepare('UPDATE terminals SET terminal_name = ?, brand = ?, model = ?, current_version = ?, label_id = ?, bank_type = ?, remarks = ? WHERE terminal_id = ?')
                 ->execute([...$fields, $id]);
         } else {
-            $pdo->prepare('INSERT INTO terminals (terminal_name, brand, model, current_version, label_id, bank_type, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            $pdo->prepare('INSERT INTO terminals (terminal_name, brand, model, current_version, label_id, bank_type, remarks, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
                 ->execute([...$fields, $user['user_id']]);
             $id = (int) $pdo->lastInsertId();
         }
+        terminal_faqs_save($pdo, $id, $faqRows);
 
         $obsolete = [];
         for ($slot = 1; $slot <= TERMINAL_MAX_PHOTOS; $slot++) {
@@ -165,9 +168,10 @@ $sql    = 'SELECT t.*, l.name AS label_name, CONCAT(u.first_name, \' \', u.last_
            LEFT JOIN users u ON u.user_id = t.created_by WHERE 1 = 1';
 $params = [];
 if ($q !== '') {
-    $sql .= ' AND (t.terminal_name LIKE ? OR t.brand LIKE ? OR t.model LIKE ? OR t.current_version LIKE ?)';
+    $sql .= ' AND (t.terminal_name LIKE ? OR t.brand LIKE ? OR t.model LIKE ? OR t.current_version LIKE ? OR t.remarks LIKE ?
+                   OR EXISTS (SELECT 1 FROM terminal_faqs f WHERE f.terminal_id = t.terminal_id AND (f.question LIKE ? OR f.answer LIKE ?)))';
     $like = '%' . addcslashes($q, '%_\\') . '%';
-    array_push($params, ...array_fill(0, 4, $like));
+    array_push($params, ...array_fill(0, 7, $like));
 }
 if ($labelId) {
     $sql .= ' AND t.label_id = ?';
@@ -181,6 +185,7 @@ $stmt = db()->prepare($sql . ' ORDER BY t.terminal_name');
 $stmt->execute($params);
 $terminals = $stmt->fetchAll();
 $photos    = terminal_photos(array_column($terminals, 'terminal_id'));
+$faqs      = terminal_faqs(array_column($terminals, 'terminal_id'));
 
 $total = (int) db()->query('SELECT COUNT(*) FROM terminals')->fetchColumn();
 
@@ -212,7 +217,7 @@ require __DIR__ . '/includes/sidebar.php';
           <form method="get" class="row g-2 align-items-end mb-3">
             <div class="col-md-4">
               <label for="q" class="form-label">Search</label>
-              <input type="search" name="q" id="q" class="form-control" placeholder="Name, brand, model or version" value="<?= e($q) ?>">
+              <input type="search" name="q" id="q" class="form-control" placeholder="Name, brand, model, version, remarks or FAQ" value="<?= e($q) ?>">
             </div>
             <div class="col-6 col-md-2">
               <label for="fLabel" class="form-label">Label</label>
@@ -263,6 +268,8 @@ require __DIR__ . '/includes/sidebar.php';
               <tbody>
 <?php foreach ($terminals as $t):
     $tPhotos = $photos[(int) $t['terminal_id']] ?? [];
+    $tFaqs   = $faqs[(int) $t['terminal_id']] ?? [];
+    $faqJson = json_encode(array_map(fn($f) => ['id' => $f['faq_id'], 'q' => $f['question'], 'a' => $f['answer']], $tFaqs));
 ?>
                 <tr>
                   <td>
@@ -277,7 +284,17 @@ require __DIR__ . '/includes/sidebar.php';
 <?php endif; ?>
                     </div>
                   </td>
-                  <td class="fw-semibold"><?= e($t['terminal_name']) ?></td>
+                  <td>
+                    <span class="fw-semibold"><?= e($t['terminal_name']) ?></span>
+<?php if ($t['remarks']): ?>
+                    <span class="d-block small text-muted text-truncate" style="max-width: 240px" title="<?= e($t['remarks']) ?>"><?= e($t['remarks']) ?></span>
+<?php endif; ?>
+<?php if ($t['remarks'] || $tFaqs): ?>
+                    <button type="button" class="btn btn-sm btn-link p-0 view-terminal" data-name="<?= e($t['terminal_name']) ?>" data-remarks="<?= e($t['remarks'] ?? '') ?>" data-faqs="<?= e($faqJson) ?>">
+                      <i class="bi bi-info-circle"></i> <?= $tFaqs ? 'Remarks &amp; FAQ (' . count($tFaqs) . ')' : 'Remarks' ?>
+                    </button>
+<?php endif; ?>
+                  </td>
                   <td>
                     <?= e($t['model'] ?? '') ?><?= $t['model'] ? '<br>' : '' ?>
                     <span class="small text-muted"><?= e($t['brand']) ?><?= $t['current_version'] ? ' · v' . e($t['current_version']) : '' ?></span>
@@ -293,6 +310,7 @@ require __DIR__ . '/includes/sidebar.php';
                             data-id="<?= (int) $t['terminal_id'] ?>" data-name="<?= e($t['terminal_name']) ?>" data-brand="<?= e($t['brand']) ?>"
                             data-model="<?= e($t['model'] ?? '') ?>" data-version="<?= e($t['current_version'] ?? '') ?>"
                             data-label="<?= (int) $t['label_id'] ?>" data-label-name="<?= e($t['label_name']) ?>" data-bank="<?= e($t['bank_type']) ?>"
+                            data-remarks="<?= e($t['remarks'] ?? '') ?>" data-faqs="<?= e($faqJson) ?>"
                             data-photos="<?= e(json_encode(array_map(fn($p) => $p['url'], $tPhotos))) ?>">
                       <i class="bi bi-pencil"></i> Edit
                     </button>
@@ -340,6 +358,7 @@ require __DIR__ . '/includes/sidebar.php';
               <li><strong>Label</strong>: choose from the list. Admins can add new labels.</li>
               <li><strong>Bank</strong>: BDO or Non-BDO.</li>
               <li><strong>Current Version</strong>: optional, the software version now on the terminal.</li>
+              <li><strong>Remarks</strong> and <strong>FAQ</strong>: optional notes, and common questions with their answers. Add, edit or remove FAQs any time.</li>
             </ul>
           </div>
 
@@ -410,6 +429,33 @@ require __DIR__ . '/includes/sidebar.php';
             <div class="col-md-6">
               <label for="tmVersion" class="form-label">Current Version <span class="text-muted small">(optional)</span></label>
               <input type="text" name="current_version" id="tmVersion" class="form-control" maxlength="30" placeholder="e.g. 16.20">
+            </div>
+
+            <div class="col-12">
+              <label for="tmRemarks" class="form-label">Remarks <span class="text-muted small">(optional)</span></label>
+              <textarea name="remarks" id="tmRemarks" class="form-control" rows="3" maxlength="<?= TERMINAL_REMARKS_MAX ?>" placeholder="Notes about this terminal"></textarea>
+            </div>
+
+            <div class="col-12">
+              <div class="d-flex align-items-center justify-content-between mb-2">
+                <span class="form-label mb-0">FAQ <span class="text-muted small">(optional, up to <?= TERMINAL_FAQ_MAX ?>)</span></span>
+                <button type="button" class="btn btn-sm btn-outline-primary" id="tmAddFaq"><i class="bi bi-plus-lg"></i> Add FAQ</button>
+              </div>
+              <div id="tmFaqList"></div>
+              <p class="small text-muted mb-0" id="tmFaqEmpty">No FAQs yet. Use <strong>Add FAQ</strong> to add a question and its answer.</p>
+              <template id="tmFaqTemplate">
+                <div class="border rounded p-2 mb-2 faq-row">
+                  <input type="hidden" name="faq_id[]" class="faq-id" value="">
+                  <div class="d-flex align-items-center gap-1 mb-1">
+                    <span class="small fw-semibold me-auto faq-number">FAQ</span>
+                    <button type="button" class="btn btn-sm btn-outline-secondary py-0 faq-up" title="Move up" aria-label="Move up"><i class="bi bi-arrow-up"></i></button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary py-0 faq-down" title="Move down" aria-label="Move down"><i class="bi bi-arrow-down"></i></button>
+                    <button type="button" class="btn btn-sm btn-outline-danger py-0 faq-remove" title="Remove" aria-label="Remove FAQ"><i class="bi bi-trash"></i></button>
+                  </div>
+                  <input type="text" name="faq_question[]" class="form-control form-control-sm mb-1 faq-question" maxlength="<?= TERMINAL_FAQ_QUESTION_MAX ?>" placeholder="Question" aria-label="Question">
+                  <textarea name="faq_answer[]" class="form-control form-control-sm faq-answer" rows="2" maxlength="<?= TERMINAL_FAQ_ANSWER_MAX ?>" placeholder="Answer" aria-label="Answer"></textarea>
+                </div>
+              </template>
             </div>
           </div>
         </div>
@@ -533,6 +579,48 @@ require __DIR__ . '/includes/sidebar.php';
         slot.querySelector(".slot-clear").addEventListener("click", function () { input.value = ""; renderSlot(slot); });
       });
 
+      /* ---------- FAQs ---------- */
+
+      var faqList = document.getElementById("tmFaqList");
+      var faqTemplate = document.getElementById("tmFaqTemplate");
+      var addFaqBtn = document.getElementById("tmAddFaq");
+      var faqMax = <?= TERMINAL_FAQ_MAX ?>;
+
+      function renumberFaqs() {
+        var rows = faqList.querySelectorAll(".faq-row");
+        rows.forEach(function (row, i) {
+          row.querySelector(".faq-number").textContent = "FAQ " + (i + 1);
+          row.querySelector(".faq-up").disabled = i === 0;
+          row.querySelector(".faq-down").disabled = i === rows.length - 1;
+        });
+        document.getElementById("tmFaqEmpty").classList.toggle("d-none", rows.length > 0);
+        addFaqBtn.disabled = rows.length >= faqMax;
+      }
+
+      function addFaq(faq) {
+        var row = faqTemplate.content.firstElementChild.cloneNode(true);
+        row.querySelector(".faq-id").value = faq && faq.id ? faq.id : "";
+        row.querySelector(".faq-question").value = faq ? faq.q : "";
+        row.querySelector(".faq-answer").value = faq ? faq.a : "";
+        row.querySelector(".faq-remove").addEventListener("click", function () {
+          var filled = row.querySelector(".faq-question").value.trim() || row.querySelector(".faq-answer").value.trim();
+          if (filled && !confirm("Remove this FAQ? It is deleted when you save the terminal.")) { return; }
+          row.remove();
+          renumberFaqs();
+        });
+        row.querySelector(".faq-up").addEventListener("click", function () {
+          if (row.previousElementSibling) { faqList.insertBefore(row, row.previousElementSibling); renumberFaqs(); }
+        });
+        row.querySelector(".faq-down").addEventListener("click", function () {
+          if (row.nextElementSibling) { faqList.insertBefore(row.nextElementSibling, row); renumberFaqs(); }
+        });
+        faqList.appendChild(row);
+        renumberFaqs();
+        return row;
+      }
+
+      addFaqBtn.addEventListener("click", function () { addFaq(null).querySelector(".faq-question").focus(); });
+
       /* ---------- Open / save / delete ---------- */
 
       function open(data) {
@@ -546,6 +634,10 @@ require __DIR__ . '/includes/sidebar.php';
         document.getElementById("tmBrand").value = data ? data.brand : "";
         document.getElementById("tmModel").value = data ? data.model : "";
         document.getElementById("tmVersion").value = data ? data.version : "";
+        document.getElementById("tmRemarks").value = data ? data.remarks : "";
+        faqList.innerHTML = "";
+        (data ? JSON.parse(data.faqs || "[]") : []).forEach(addFaq);
+        renumberFaqs();
         // A terminal may keep a label that has since been deactivated.
         if (data && !labelSelect.querySelector('option[value="' + data.label + '"]')) {
           addLabelOption(data.label, data.labelName, " (inactive)").setAttribute("data-inactive", "");
@@ -600,6 +692,73 @@ require __DIR__ . '/includes/sidebar.php';
     })();
   </script>
 <?php endif; ?>
+
+  <!-- Remarks & FAQ (everyone) -->
+  <div class="modal fade" id="terminalInfoModal" tabindex="-1" aria-labelledby="terminalInfoTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="terminalInfoTitle">Terminal</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div id="tiRemarksWrap" class="mb-3">
+            <h6 class="fw-semibold">Remarks</h6>
+            <p id="tiRemarks" class="mb-0" style="white-space: pre-wrap"></p>
+          </div>
+          <div id="tiFaqWrap">
+            <h6 class="fw-semibold">FAQ</h6>
+            <div class="accordion" id="tiFaqs"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var list = document.getElementById("tiFaqs");
+      document.querySelectorAll(".view-terminal").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var faqs = JSON.parse(btn.dataset.faqs || "[]");
+          document.getElementById("terminalInfoTitle").textContent = btn.dataset.name;
+          document.getElementById("tiRemarks").textContent = btn.dataset.remarks;
+          document.getElementById("tiRemarksWrap").classList.toggle("d-none", !btn.dataset.remarks);
+          document.getElementById("tiFaqWrap").classList.toggle("d-none", !faqs.length);
+          list.innerHTML = "";
+          faqs.forEach(function (faq, i) {
+            var item = document.createElement("div");
+            item.className = "accordion-item";
+            var header = document.createElement("h2");
+            header.className = "accordion-header";
+            var toggle = document.createElement("button");
+            toggle.type = "button";
+            toggle.className = "accordion-button collapsed";
+            toggle.setAttribute("data-bs-toggle", "collapse");
+            toggle.setAttribute("data-bs-target", "#tiFaq" + i);
+            toggle.textContent = faq.q;
+            header.appendChild(toggle);
+            var body = document.createElement("div");
+            body.id = "tiFaq" + i;
+            body.className = "accordion-collapse collapse";
+            body.setAttribute("data-bs-parent", "#tiFaqs");
+            var inner = document.createElement("div");
+            inner.className = "accordion-body";
+            inner.style.whiteSpace = "pre-wrap";
+            inner.textContent = faq.a;
+            body.appendChild(inner);
+            item.appendChild(header);
+            item.appendChild(body);
+            list.appendChild(item);
+          });
+          bootstrap.Modal.getOrCreateInstance(document.getElementById("terminalInfoModal")).show();
+        });
+      });
+    })();
+  </script>
 
 <?php
 require __DIR__ . '/includes/footer.php';

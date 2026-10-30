@@ -5,6 +5,7 @@
  * - Route fare master list lookups and changes (with history)
  * - Transport modes (transpo_modes table): list, register a missing one
  * - Permissions and formatting
+ * - Weekly totals, Monday to Sunday (dashboard)
  * Include after includes/config.php.
  */
 
@@ -677,4 +678,67 @@ function transpo_location_json(array $loc): array
         'address'    => (string) ($loc['address'] ?? ''),
         'times_used' => (int) ($loc['times_used'] ?? 0),
     ];
+}
+
+/* ======================================================================
+ * Weekly totals (dashboard)
+ * ==================================================================== */
+
+/**
+ * The Monday (Y-m-d) of the week that contains $date; today's week when $date
+ * is missing or not a valid Y-m-d date. Weeks run Monday to Sunday.
+ */
+function transpo_week_start(?string $date = null): string
+{
+    $d = $date !== null ? DateTimeImmutable::createFromFormat('!Y-m-d', $date) : false;
+    if ($d === false || $d->format('Y-m-d') !== $date) {
+        $d = new DateTimeImmutable('today');
+    }
+    return $d->modify('-' . ((int) $d->format('N') - 1) . ' days')->format('Y-m-d');
+}
+
+/** The seven dates (Y-m-d) of the week starting on Monday $monday. */
+function transpo_week_days(string $monday): array
+{
+    $start = new DateTimeImmutable($monday);
+    return array_map(fn(int $i): string => $start->modify("+$i days")->format('Y-m-d'), range(0, 6));
+}
+
+/**
+ * Transpo per engineer for the week starting on $monday, one engineer or everyone:
+ * [user_id => ['engineer', 'field_engineer_id', 'days' => [Y-m-d => amount] (all 7 days), 'tickets', 'total']],
+ * ordered by name. Only engineers with at least one ticket that week are listed.
+ */
+function transpo_week_totals(string $monday, ?int $engineerId = null): array
+{
+    $days   = transpo_week_days($monday);
+    $sql    = "SELECT v.engineer_id, CONCAT(u.last_name, ', ', u.first_name) AS engineer, u.field_engineer_id,
+                      DATE(v.visited_at) AS day, COUNT(DISTINCT v.id) AS tickets, COALESCE(SUM(g.fare), 0) AS total
+               FROM transpo_ticket_visits v
+               JOIN users u ON u.user_id = v.engineer_id
+               LEFT JOIN transpo_trip_legs g ON g.visit_id = v.id
+               WHERE v.visited_at >= ? AND v.visited_at < ? + INTERVAL 7 DAY";
+    $params = [$monday, $monday];
+    if ($engineerId !== null) {
+        $sql     .= ' AND v.engineer_id = ?';
+        $params[] = $engineerId;
+    }
+    $stmt = db()->prepare($sql . ' GROUP BY v.engineer_id, DATE(v.visited_at) ORDER BY engineer, v.engineer_id');
+    $stmt->execute($params);
+
+    $weeks = [];
+    foreach ($stmt->fetchAll() as $r) {
+        $id = (int) $r['engineer_id'];
+        $weeks[$id] ??= [
+            'engineer'          => $r['engineer'],
+            'field_engineer_id' => $r['field_engineer_id'],
+            'days'              => array_fill_keys($days, 0.0),
+            'tickets'           => 0,
+            'total'             => 0.0,
+        ];
+        $weeks[$id]['days'][$r['day']] = (float) $r['total'];
+        $weeks[$id]['tickets']        += (int) $r['tickets'];
+        $weeks[$id]['total']          += (float) $r['total'];
+    }
+    return $weeks;
 }

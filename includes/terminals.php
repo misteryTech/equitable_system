@@ -19,6 +19,11 @@ const TERMINAL_IMAGE_DEFAULT = 'assets/img/terminal-default.svg';
 const TERMINAL_IMAGE_MAX     = 1000;   // longest side in pixels after saving
 const TERMINAL_MAX_PHOTOS    = 3;      // photo slots per terminal
 
+const TERMINAL_REMARKS_MAX      = 2000;   // characters
+const TERMINAL_FAQ_MAX          = 30;     // FAQs per terminal
+const TERMINAL_FAQ_QUESTION_MAX = 255;
+const TERMINAL_FAQ_ANSWER_MAX   = 2000;
+
 /**
  * Photos for the given terminals: [terminal_id => [slot => ['photo_id', 'file', 'url']]].
  */
@@ -211,7 +216,7 @@ function terminal_label_add(string $name): array
 
 /**
  * Check the posted terminal fields.
- *   $in: terminal_name, brand, model, current_version, label_id, bank_type
+ *   $in: terminal_name, brand, model, current_version, label_id, bank_type, remarks
  *   $labels: terminal_labels() rows keyed by id
  *   $currentLabelId: the label the terminal already has (it may stay even if now inactive)
  * Returns [clean values, errors]. The unique name check needs the database and is done by the page.
@@ -226,6 +231,7 @@ function terminal_validate(array $in, array $labels, ?int $currentLabelId = null
         'current_version' => $clean('current_version'),
         'label_id'        => (int) ($in['label_id'] ?? 0),
         'bank_type'       => (string) ($in['bank_type'] ?? ''),
+        'remarks'         => terminal_text_clean((string) ($in['remarks'] ?? '')),   // keeps line breaks
     ];
     $errors = [];
 
@@ -252,7 +258,103 @@ function terminal_validate(array $in, array $labels, ?int $currentLabelId = null
     if (!array_key_exists($values['bank_type'], TERMINAL_BANKS)) {
         $errors[] = 'Please choose BDO or Non-BDO.';
     }
+    if (mb_strlen($values['remarks']) > TERMINAL_REMARKS_MAX) {
+        $errors[] = 'Remarks must be at most ' . TERMINAL_REMARKS_MAX . ' characters.';
+    }
     return [$values, $errors];
+}
+
+/** Multi-line text: Windows line breaks unified, spaces trimmed at the ends. */
+function terminal_text_clean(string $text): string
+{
+    return trim(str_replace("\r\n", "\n", $text));
+}
+
+/* ---------- FAQs ---------- */
+
+/**
+ * Check the posted FAQ rows (faq_id[], faq_question[], faq_answer[], in form order).
+ * Rows with both question and answer empty are skipped. Returns
+ * [[['faq_id' => int (0 = new), 'question', 'answer'], …], errors].
+ */
+function terminal_faq_validate(array $in): array
+{
+    $ids       = array_values((array) ($in['faq_id'] ?? []));
+    $questions = array_values((array) ($in['faq_question'] ?? []));
+    $answers   = array_values((array) ($in['faq_answer'] ?? []));
+
+    $rows = $errors = [];
+    foreach ($questions as $i => $question) {
+        $question = trim(preg_replace('/\s+/', ' ', (string) $question));
+        $answer   = terminal_text_clean((string) ($answers[$i] ?? ''));
+        if ($question === '' && $answer === '') {
+            continue;
+        }
+        $n = count($rows) + 1;
+        if ($question === '') {
+            $errors[] = "FAQ $n: the question is required.";
+        } elseif (mb_strlen($question) > TERMINAL_FAQ_QUESTION_MAX) {
+            $errors[] = "FAQ $n: the question must be at most " . TERMINAL_FAQ_QUESTION_MAX . ' characters.';
+        }
+        if ($answer === '') {
+            $errors[] = "FAQ $n: the answer is required.";
+        } elseif (mb_strlen($answer) > TERMINAL_FAQ_ANSWER_MAX) {
+            $errors[] = "FAQ $n: the answer must be at most " . TERMINAL_FAQ_ANSWER_MAX . ' characters.';
+        }
+        $rows[] = ['faq_id' => max(0, (int) ($ids[$i] ?? 0)), 'question' => $question, 'answer' => $answer];
+    }
+    if (count($rows) > TERMINAL_FAQ_MAX) {
+        $errors[] = 'A terminal can have at most ' . TERMINAL_FAQ_MAX . ' FAQs.';
+    }
+    return [$rows, $errors];
+}
+
+/**
+ * FAQs for the given terminals in display order: [terminal_id => [['faq_id', 'question', 'answer'], …]].
+ */
+function terminal_faqs(array $terminalIds): array
+{
+    $terminalIds = array_values(array_filter(array_map('intval', $terminalIds)));
+    if (!$terminalIds) {
+        return [];
+    }
+    $placeholders = implode(',', array_fill(0, count($terminalIds), '?'));
+    $stmt = db()->prepare("SELECT faq_id, terminal_id, question, answer FROM terminal_faqs WHERE terminal_id IN ($placeholders) ORDER BY sort_order, faq_id");
+    $stmt->execute($terminalIds);
+
+    $faqs = [];
+    foreach ($stmt->fetchAll() as $row) {
+        $faqs[(int) $row['terminal_id']][] = ['faq_id' => (int) $row['faq_id'], 'question' => $row['question'], 'answer' => $row['answer']];
+    }
+    return $faqs;
+}
+
+/**
+ * Save a terminal's FAQs as posted: known rows are updated, new rows added,
+ * rows left out of the form removed. Run inside the terminal's transaction.
+ */
+function terminal_faqs_save(PDO $pdo, int $terminalId, array $rows): void
+{
+    $stmt = $pdo->prepare('SELECT faq_id FROM terminal_faqs WHERE terminal_id = ?');
+    $stmt->execute([$terminalId]);
+    $existing = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+
+    $update = $pdo->prepare('UPDATE terminal_faqs SET question = ?, answer = ?, sort_order = ? WHERE faq_id = ? AND terminal_id = ?');
+    $insert = $pdo->prepare('INSERT INTO terminal_faqs (terminal_id, question, answer, sort_order) VALUES (?, ?, ?, ?)');
+    $keep   = [];
+    foreach ($rows as $i => $row) {
+        $order = ($i + 1) * 10;
+        if ($row['faq_id'] && in_array($row['faq_id'], $existing, true)) {
+            $update->execute([$row['question'], $row['answer'], $order, $row['faq_id'], $terminalId]);
+            $keep[] = $row['faq_id'];
+        } else {
+            $insert->execute([$terminalId, $row['question'], $row['answer'], $order]);
+        }
+    }
+    $delete = $pdo->prepare('DELETE FROM terminal_faqs WHERE faq_id = ?');
+    foreach (array_diff($existing, $keep) as $faqId) {
+        $delete->execute([$faqId]);
+    }
 }
 
 function terminal_bank_badge(string $bank): string

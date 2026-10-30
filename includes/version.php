@@ -8,8 +8,8 @@
  *   1.2.0 -> 1.3.0  new features
  *   1.2.0 -> 1.2.1  fixes only
  */
-const APP_VERSION  = '1.2.0';
-const APP_RELEASED = '2026-10-28';   // Y-m-d
+const APP_VERSION  = '1.3.0';
+const APP_RELEASED = '2026-10-30';   // Y-m-d
 
 /**
  * "v1.2.0 · Oct 28, 2026"

@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS terminals (
   current_version VARCHAR(30)  NULL,
   label_id      INT UNSIGNED NOT NULL,
   bank_type     ENUM('bdo', 'non_bdo') NOT NULL,          -- BDO or Non-BDO
+  remarks       TEXT NULL,
   created_by    INT UNSIGNED NULL,
   created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -141,6 +142,19 @@ CREATE TABLE IF NOT EXISTS terminal_photos (
   created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_terminal_slot (terminal_id, slot),
   CONSTRAINT fk_terminal_photos_terminal FOREIGN KEY (terminal_id) REFERENCES terminals(terminal_id) ON DELETE CASCADE
+);
+
+-- FAQs per terminal (question + answer), added and edited by admins on Terminals.
+CREATE TABLE IF NOT EXISTS terminal_faqs (
+  faq_id      INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  terminal_id INT UNSIGNED NOT NULL,
+  question    VARCHAR(255) NOT NULL,
+  answer      TEXT NOT NULL,
+  sort_order  SMALLINT NOT NULL DEFAULT 0,       -- display order (order in the form)
+  created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY idx_terminal_faqs_terminal (terminal_id, sort_order),
+  CONSTRAINT fk_terminal_faqs_terminal FOREIGN KEY (terminal_id) REFERENCES terminals(terminal_id) ON DELETE CASCADE
 );
 
 -- Leave days picked by each user (any dates, once per date).

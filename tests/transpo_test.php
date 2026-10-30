@@ -102,5 +102,13 @@ check('odd characters refused',               [transpo_mode_label_error('<b>Bus<
     ['Mode name may use letters, numbers, spaces and - / ( ) . & +', 'Mode name may use letters, numbers, spaces and - / ( ) . & +']);
 check('import modes are protected',           array_map(fn($w) => in_array(transpo_import_mode($w), TRANSPO_MODE_BUILT_IN, true), ['tryke', 'jeep', 'habal', 'boat']), [true, true, true, true]);
 
+echo "\nWeeks (Monday to Sunday)\n";
+check('Wednesday -> its Monday',        transpo_week_start('2026-10-28'), '2026-10-26');
+check('Monday stays',                   transpo_week_start('2026-10-26'), '2026-10-26');
+check('Sunday belongs to the week before', transpo_week_start('2026-11-01'), '2026-10-26');
+check('week across the new year',       transpo_week_start('2027-01-02'), '2026-12-28');
+check('bad date -> this week',          transpo_week_start('2026-02-30'), transpo_week_start());
+check('no date -> this week is a Monday', date('N', strtotime(transpo_week_start())), '1');
+check('seven days, Monday to Sunday',   transpo_week_days('2026-12-28'), ['2026-12-28', '2026-12-29', '2026-12-30', '2026-12-31', '2027-01-01', '2027-01-02', '2027-01-03']);
 echo "\n$passed passed, $failed failed\n";
 exit($failed ? 1 : 0);

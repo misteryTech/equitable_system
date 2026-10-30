@@ -63,7 +63,7 @@ check('inactive label refused when editing a terminal with another label', termi
 
 echo "\nRemoved fields are ignored\n";
 [$values] = terminal_validate($good + ['serial_number' => '2367KD8E6059', 'tid' => '22019744', 'merchant_name' => 'X', 'merchant_address' => 'Y', 'label' => 'TBG'], $labels);
-check('only the kept fields are returned', array_keys($values), ['terminal_name', 'brand', 'model', 'current_version', 'label_id', 'bank_type']);
+check('only the kept fields are returned', array_keys($values), ['terminal_name', 'brand', 'model', 'current_version', 'label_id', 'bank_type', 'remarks']);
 
 echo "\nLabel names\n";
 check('clean: spaces tidied',  terminal_label_clean('  CBG   MP '), 'CBG MP');
@@ -76,5 +76,31 @@ check('seeded labels keep their colours', [terminal_label_badge_class(1), termin
 check('colours repeat after the list',    terminal_label_badge_class(1 + count(TERMINAL_LABEL_BADGES)), 'bg-primary');
 check('badge text is escaped',            terminal_label_badge(4, '<b>X</b>'), '<span class="badge bg-success">&lt;b&gt;X&lt;/b&gt;</span>');
 
+echo "\nRemarks\n";
+[$values, $errors] = terminal_validate($good + ['remarks' => "  Line 1\r\nLine 2  "], $labels);
+check('remarks: line breaks kept, ends trimmed', $values['remarks'], "Line 1\nLine 2");
+check('remarks: optional',                       terminal_validate($good, $labels)[0]['remarks'], '');
+[, $errors] = terminal_validate($good + ['remarks' => str_repeat('r', 2001)], $labels);
+check('remarks: too long',                       $errors, ['Remarks must be at most 2000 characters.']);
+
+echo "\nFAQs\n";
+[$rows, $errors] = terminal_faq_validate([
+    'faq_id'       => ['7', '', ''],
+    'faq_question' => ['  How to   reset? ', '', 'New one?'],
+    'faq_answer'   => ["Hold power\r\nfor 10s", '', 'Yes'],
+]);
+check('faq: no errors',                 $errors, []);
+check('faq: empty rows skipped, order kept, ids kept', $rows, [
+    ['faq_id' => 7, 'question' => 'How to reset?', 'answer' => "Hold power\nfor 10s"],
+    ['faq_id' => 0, 'question' => 'New one?',      'answer' => 'Yes'],
+]);
+check('faq: none posted', terminal_faq_validate([]), [[], []]);
+[, $errors] = terminal_faq_validate(['faq_question' => ['Q only', ''], 'faq_answer' => ['', 'A only']]);
+check('faq: question and answer both required', $errors, ['FAQ 1: the answer is required.', 'FAQ 2: the question is required.']);
+[, $errors] = terminal_faq_validate(['faq_question' => [str_repeat('q', 256)], 'faq_answer' => [str_repeat('a', 2001)]]);
+check('faq: too long', $errors, ['FAQ 1: the question must be at most 255 characters.', 'FAQ 1: the answer must be at most 2000 characters.']);
+[, $errors] = terminal_faq_validate(['faq_question' => array_fill(0, 31, 'Q'), 'faq_answer' => array_fill(0, 31, 'A')]);
+check('faq: at most 30', $errors, ['A terminal can have at most 30 FAQs.']);
+check('faq: negative id treated as new', terminal_faq_validate(['faq_id' => ['-3'], 'faq_question' => ['Q'], 'faq_answer' => ['A']])[0][0]['faq_id'], 0);
 echo "\n$passed passed, $failed failed\n";
 exit($failed ? 1 : 0);
