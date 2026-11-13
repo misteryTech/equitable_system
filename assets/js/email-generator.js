@@ -192,6 +192,71 @@
     return { subject: atwSubject(names, tickets), body: body.join("\n") };
   }
 
+  /* ---------- Pasted merchant details ---------- */
+
+  // Labels (lower case, letters and digits only) that fill a form field.
+  var PASTE_FIELDS = {
+    tn:       ["servicecallno", "servicecallnumber", "servicecall", "scno", "ticketno", "ticketnumber", "tn"],
+    tid:      ["terminalid", "tid"],
+    merchant: ["merchantname", "dbaname", "tradename"],
+    sn:       ["serialno", "serialnumber", "terminalsn", "sn"]
+  };
+  var PASTE_LABEL = /^([A-Za-z][A-Za-z0-9 .\/#()&'-]{0,40}?)\s*(?::|\t)\s*(.*)$/;
+  var PASTE_EMPTY = /^(n\s*\/?\s*a|none|null|-+)(\s*\(.*\))?$/i;   // "N/A", "N/A (field not shown)", "-"
+
+  function pasteKey(label) { return label.toLowerCase().replace(/[^a-z0-9]/g, ""); }
+
+  /**
+   * Read "Label: value" lines (also "Label<Tab>value", or a label line followed by
+   * its value on the next line), e.g. the MERCHANT DETAILS block from the ticket.
+   * Returns { fields: { tn, tid, merchant, sn } (only those found), details: [{ label, value }],
+   * byKey: { "address": …, "address2": … } } where details are the other filled lines, in order,
+   * and byKey has every filled line by its label key (lower case, letters and digits).
+   */
+  function parseMerchantDetails(text) {
+    var fields = {}, details = [], byKey = {}, pending = null;
+    function keep(label, value) {
+      value = squash(value);
+      if (value === "" || PASTE_EMPTY.test(value)) { return; }
+      var key = pasteKey(label);
+      if (!(key in byKey)) { byKey[key] = value; }
+      for (var field in PASTE_FIELDS) {
+        if (PASTE_FIELDS[field].indexOf(key) !== -1) {
+          if (!(field in fields)) { fields[field] = value; }
+          return;
+        }
+      }
+      details.push({ label: squash(label).replace(/:+$/, ""), value: value });
+    }
+    String(text == null ? "" : text).split(/\r\n|\r|\n/).forEach(function (line) {
+      line = trim(line);
+      if (line === "") { return; }
+      var m = PASTE_LABEL.exec(line);
+      if (m && trim(m[2]) !== "") { pending = null; keep(m[1], m[2]); return; }
+      if (m) { pending = m[1]; return; }               // "Label:" alone: the value is on the next line
+      if (pending !== null) { keep(pending, line); pending = null; }
+    });
+    return { fields: fields, details: details, byKey: byKey };
+  }
+
+  /**
+   * Several MERCHANT DETAILS blocks pasted together: a new block starts at each
+   * Service Call No. / Ticket No. line once the current block already has one.
+   * Returns one parseMerchantDetails() result per block that has a ticket or merchant name.
+   */
+  function parseMerchantList(text) {
+    var blocks = [[]], hasTicket = false;
+    String(text == null ? "" : text).split(/\r\n|\r|\n/).forEach(function (line) {
+      var m = PASTE_LABEL.exec(trim(line));
+      var isTicket = !!m && PASTE_FIELDS.tn.indexOf(pasteKey(m[1])) !== -1;
+      if (isTicket && hasTicket) { blocks.push([]); hasTicket = false; }
+      if (isTicket) { hasTicket = true; }
+      blocks[blocks.length - 1].push(line);
+    });
+    return blocks.map(function (lines) { return parseMerchantDetails(lines.join("\n")); })
+      .filter(function (r) { return r.fields.tn !== undefined || r.fields.merchant !== undefined; });
+  }
+
   /* ---------- Copy + toast ---------- */
 
   // Fallback for browsers without the Clipboard API (e.g. the site opened over plain http on a LAN IP).
@@ -426,7 +491,7 @@
   window.EmailGen = {
     greeting: greeting, recipientFormat: recipientFormat, recipientsString: recipientsString,
     serviceAction: serviceAction, serviceSentence: serviceSentence, serviceSubject: serviceSubject, serviceBuild: serviceBuild,
-    atwDate: atwDate, atwSubject: atwSubject, atwBuild: atwBuild,
+    atwDate: atwDate, atwSubject: atwSubject, atwBuild: atwBuild, parseMerchantDetails: parseMerchantDetails, parseMerchantList: parseMerchantList,
     copyText: copyText, copyWithToast: copyWithToast, toast: toast, RecipientsBox: RecipientsBox
   };
 })();

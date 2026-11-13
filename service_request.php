@@ -160,6 +160,23 @@ require __DIR__ . '/includes/sidebar.php';
 
               <div class="row g-3">
                 <div class="col-12">
+                  <div class="border rounded p-2 bg-light">
+                    <label for="erPaste" class="form-label fw-semibold mb-1"><i class="bi bi-clipboard-check"></i> Paste merchant details <span class="text-muted small fw-normal">(optional)</span></label>
+                    <textarea id="erPaste" class="form-control form-control-sm font-monospace" rows="3" placeholder="Paste the MERCHANT DETAILS from the ticket (Service Call No., Terminal ID, Merchant Name …) — the fields below fill in by themselves."></textarea>
+                    <div class="d-flex flex-wrap gap-2 mt-2">
+                      <button type="button" class="btn btn-sm btn-primary" id="erPasteFill"><i class="bi bi-magic"></i> Fill in</button>
+                      <button type="button" class="btn btn-sm btn-outline-secondary" id="erPasteClear">Clear</button>
+                    </div>
+                    <div class="small mt-2 d-none" id="erPasteResult" role="status"></div>
+                    <div class="d-none mt-2" id="erPasteDetailsWrap">
+                      <div class="small text-muted mb-1">Other details found:</div>
+                      <dl class="row small mb-1" id="erPasteDetails"></dl>
+                      <button type="button" class="btn btn-sm btn-outline-primary" id="erPasteNotes"><i class="bi bi-journal-plus"></i> Add these to Extra Notes</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="col-12">
                   <label for="erTerminal" class="form-label">Terminal</label>
                   <select name="terminal_id" id="erTerminal" placeholder="Search terminal name, model or brand…" autocomplete="off">
                     <option value="">Search terminal name, model or brand…</option>
@@ -365,6 +382,66 @@ require __DIR__ . '/includes/sidebar.php';
         if (!$("erMerchant").value.trim() && known.merchant) { $("erMerchant").value = known.merchant; }
         if (!$("erSn").value.trim() && known.sn) { $("erSn").value = known.sn; }
         render();
+      });
+
+      /* ---------- Paste merchant details ---------- */
+
+      // Service Call No. -> Ticket Number, Terminal ID -> TID, Merchant Name -> Merchant, Serial No. -> SN.
+      var pasteTargets = { tn: ["erTn", "Ticket Number"], tid: ["erTid", "TID"], merchant: ["erMerchant", "Merchant Name"], sn: ["erSn", "SN"] };
+      var pasted = null;   // last parse result
+
+      function fillFromPaste() {
+        var text = $("erPaste").value;
+        var result = $("erPasteResult");
+        pasted = EG.parseMerchantDetails(text);
+        var filled = [], missing = [];
+        Object.keys(pasteTargets).forEach(function (key) {
+          var target = pasteTargets[key];
+          if (pasted.fields[key] === undefined) { missing.push(target[1]); return; }
+          var value = pasted.fields[key];
+          if (key === "tn" || key === "sn") { value = value.replace(/\s+/g, "").toUpperCase(); }
+          if (key === "tid") { value = value.replace(/\s+/g, ""); }
+          $(target[0]).value = value.slice(0, Number($(target[0]).getAttribute("maxlength")) || value.length);
+          filled.push(target[1]);
+        });
+
+        result.className = "small mt-2 " + (filled.length ? "text-success" : "text-danger");
+        result.textContent = !text.trim() ? "" : filled.length
+          ? "Filled in: " + filled.join(", ") + "." + (missing.length ? " Not in the paste: " + missing.join(", ") + "." : "")
+          : "Nothing recognised. Paste lines like \"Service Call No.: 261111-SERV-0039\" and \"Terminal ID: 22014220\".";
+        result.classList.toggle("d-none", !text.trim());
+
+        var list = $("erPasteDetails");
+        list.innerHTML = "";
+        pasted.details.forEach(function (d) {
+          var dt = document.createElement("dt"); dt.className = "col-5 fw-normal text-muted"; dt.textContent = d.label;
+          var dd = document.createElement("dd"); dd.className = "col-7 mb-0"; dd.textContent = d.value;
+          list.append(dt, dd);
+        });
+        $("erPasteDetailsWrap").classList.toggle("d-none", !pasted.details.length);
+        render();
+      }
+
+      $("erPasteFill").addEventListener("click", fillFromPaste);
+      $("erPaste").addEventListener("paste", function () { setTimeout(fillFromPaste, 0); });   // after the text lands
+      $("erPasteClear").addEventListener("click", function () {
+        $("erPaste").value = "";
+        pasted = null;
+        $("erPasteResult").classList.add("d-none");
+        $("erPasteDetailsWrap").classList.add("d-none");
+        $("erPaste").focus();
+      });
+      $("erPasteNotes").addEventListener("click", function () {
+        if (!pasted || !pasted.details.length) { return; }
+        var notes = $("erNotes");
+        var lines = pasted.details.map(function (d) { return d.label + ": " + d.value; })
+          .filter(function (line) { return notes.value.indexOf(line) === -1; });   // don't add the same line twice
+        if (!lines.length) { EG.toast("These details are already in Extra Notes.", "info"); return; }
+        var text = (notes.value.trim() ? notes.value.replace(/\s+$/, "") + "\n" : "") + lines.join("\n");
+        if (text.length > 1000) { EG.toast("Extra Notes can hold 1000 characters; some details were left out.", "warning"); }
+        notes.value = text.slice(0, 1000);
+        render();
+        notes.focus();
       });
 
       function checkedActions() {

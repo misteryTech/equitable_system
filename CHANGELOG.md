@@ -6,6 +6,16 @@ upload the new files and run the migrations listed for the versions it is missin
 
 Before each push to GitHub, raise the version in `includes/version.php` and add it here.
 
+## 1.4.0 — 2026-11-13
+
+- Service Request: **Paste merchant details**. Paste the MERCHANT DETAILS block from the ticket and the
+  Ticket Number (Service Call No.), TID (Terminal ID) and Merchant Name fill in by themselves (SN too, when
+  the paste has a Serial No.). The other details (contact person, address …) are listed and can be added
+  to Extra Notes with one click. Works with "Label: value", tab-separated rows, or the value on the next line.
+- ATW Request: the same **Paste merchant details** box fills Ticket No, Merchant Name and Merchant Address
+  (Address + Address 2). Paste one merchant after another, or several blocks at once; a ticket that is
+  already in the list is updated instead of added twice.
+
 ## 1.3.0 — 2026-10-30
 
 - Terminals: **Remarks** and **FAQ** (questions with answers) on Register / Edit Terminal. Admins can add,

@@ -176,6 +176,16 @@ require __DIR__ . '/includes/sidebar.php';
               <input type="hidden" name="action" value="save">
               <div class="alert alert-danger d-none" id="egErrors" role="alert"></div>
 
+              <div class="border rounded p-2 bg-light mb-3">
+                <label for="atwPaste" class="form-label fw-semibold mb-1"><i class="bi bi-clipboard-check"></i> Paste merchant details <span class="text-muted small fw-normal">(optional)</span></label>
+                <textarea id="atwPaste" class="form-control form-control-sm font-monospace" rows="3" placeholder="Paste the MERCHANT DETAILS from the ticket (Service Call No., Merchant Name, Address …). Paste one after another, or several at once, for more merchants."></textarea>
+                <div class="d-flex flex-wrap gap-2 mt-2">
+                  <button type="button" class="btn btn-sm btn-primary" id="atwPasteFill"><i class="bi bi-magic"></i> Fill in</button>
+                  <button type="button" class="btn btn-sm btn-outline-secondary" id="atwPasteClear">Clear</button>
+                </div>
+                <div class="small mt-2 d-none" id="atwPasteResult" role="status"></div>
+              </div>
+
               <div id="atwMerchants"></div>
               <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
                 <button type="button" class="btn btn-sm btn-outline-primary" id="atwAddMerchant"><i class="bi bi-plus-lg"></i> Add another merchant</button>
@@ -323,6 +333,55 @@ require __DIR__ . '/includes/sidebar.php';
           return { ticket: ticket.value.replace(/\s+/g, "").toUpperCase(), name: b.querySelector(".atw-name").value, address: b.querySelector(".atw-address").value, input: ticket };
         });
       }
+
+      /* ---------- Paste merchant details ---------- */
+
+      // Service Call No. -> Ticket No, Merchant Name, Address + Address 2 -> Merchant Address.
+      // A ticket already in a merchant box updates that box; otherwise the first empty box is used, or a new one added.
+      function fillFromPaste() {
+        var text = $("atwPaste").value;
+        var result = $("atwPasteResult");
+        var records = EG.parseMerchantList(text);
+        var added = 0, updated = 0;
+        records.forEach(function (r) {
+          var ticket = (r.fields.tn || "").replace(/\s+/g, "").toUpperCase();
+          var address = [r.byKey.address, r.byKey.address2].filter(Boolean).join(", ");
+          var blocks = Array.prototype.slice.call(holder.querySelectorAll(".atw-merchant"));
+          var block = blocks.filter(function (b) { return ticket !== "" && b.querySelector(".atw-ticket").value.replace(/\s+/g, "").toUpperCase() === ticket; })[0];
+          if (block) { updated++; }
+          else {
+            block = blocks.filter(function (b) {
+              return !b.querySelector(".atw-ticket").value.trim() && !b.querySelector(".atw-name").value.trim() && !b.querySelector(".atw-address").value.trim();
+            })[0];
+            if (!block) {
+              if (holder.children.length >= MAX_MERCHANTS) { return; }
+              addMerchant(false);
+              block = holder.lastElementChild;
+            }
+            added++;
+          }
+          if (ticket) { block.querySelector(".atw-ticket").value = ticket.slice(0, 30); }
+          if (r.fields.merchant) { block.querySelector(".atw-name").value = r.fields.merchant.slice(0, 150); }
+          if (address) { block.querySelector(".atw-address").value = address.slice(0, 255); }
+        });
+
+        var skipped = records.length - added - updated;
+        result.className = "small mt-2 " + (records.length ? "text-success" : "text-danger");
+        result.textContent = !text.trim() ? "" : records.length
+          ? [added && "Added " + added + " merchant" + (added === 1 ? "" : "s"), updated && "updated " + updated + " already in the list", skipped && skipped + " left out (up to " + MAX_MERCHANTS + " merchants)"]
+              .filter(Boolean).join(", ").replace(/^./, function (c) { return c.toUpperCase(); }) + "."
+          : "Nothing recognised. Paste lines like \"Service Call No.: 261111-SERV-0039\" and \"Merchant Name: AVIOR HOTEL\".";
+        result.classList.toggle("d-none", !text.trim());
+        render();
+      }
+
+      $("atwPasteFill").addEventListener("click", fillFromPaste);
+      $("atwPaste").addEventListener("paste", function () { setTimeout(fillFromPaste, 0); });   // after the text lands
+      $("atwPasteClear").addEventListener("click", function () {
+        $("atwPaste").value = "";
+        $("atwPasteResult").classList.add("d-none");
+        $("atwPaste").focus();
+      });
 
       /* ---------- Preview ---------- */
 
